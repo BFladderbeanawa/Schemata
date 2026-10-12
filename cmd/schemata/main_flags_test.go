@@ -1,0 +1,36 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"testing"
+)
+
+func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "zero height", args: []string{"encode", "--max-height", "0", "missing.bin", "out.litematic"}},
+		{name: "nonunit height", args: []string{"encode", "--max-height", "17", "missing.bin", "out.litematic"}},
+		{name: "overworld height", args: []string{"encode", "--max-height", "400", "missing.bin", "out.schematic"}},
+		{name: "empty layout", args: []string{"encode", "--layout", "", "missing.bin", "out.litematic"}},
+		{name: "padding overflow", args: []string{"encode", "--layout", "bounded", "--padding-percent", "101", "missing.bin", "out.litematic"}},
+		{name: "unsupported output", args: []string{"encode", "missing.bin", "out.schem"}},
+		{name: "no workers", args: []string{"decode", "--workers", "0", "missing.litematic", "out"}},
+		{name: "excess workers", args: []string{"decode", "--workers", "257", "missing.litematic", "out"}},
+		{name: "invalid replacement", args: []string{"decode", "--filename", "../outside.bin", "missing.litematic", "out"}},
+		{name: "unknown flag", args: []string{"encode", "--unknown"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(context.Background(), tc.args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit %d, want usage error; stderr=%q", got, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("error leaked to stdout: %q", stdout.String())
+			}
+		})
+	}
+}

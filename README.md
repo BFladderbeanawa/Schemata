@@ -58,16 +58,29 @@ Select exactly the rectangular volume, without surrounding air. Translation is s
 
 Decode uses bounded workers (1–256), assembling independent units by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
 
-Resource limits are checked before allocation: at most **64 Mi blocks** (32 MiB stream capacity), **256 MiB uncompressed NBT**, nesting depth 64, and bounded NBT node counts. Inputs above these limits fail explicitly. Adapters do not inspect payload content or infer the operation from an extension.
+Resource limits are checked before allocation: at most **64 Mi blocks** (32 MiB stream capacity), **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Inputs above these limits fail explicitly. Adapters do not inspect payload content or infer the operation from an extension.
 
 ## Verification
 
 ```sh
 go test ./...
-go test -race ./...
+go test -tags=integration ./...
+go test -race -tags=integration ./...
 ```
 
-Own writer/reader round trips do not prove importer compatibility. Compatibility results and any unavailable in-game placement checks are recorded below when exercised.
+Verified on Windows with Go 1.24.1:
+
+- Unit, integration, and race-enabled integration suites passed.
+- Built CLI: both formats × all three layouts, single/four-worker byte-exact recovery, empty files, trailing zeros, UTF-8 basenames, a schematic as opaque payload, encode/decode collisions, signed translated selections, and corruption rejection without output.
+- **Litemapy 0.11.0b0** imported a generated `.litematic`; every concrete block reconstructed the original payload and CRC32. A translated region re-exported by Litemapy decoded byte-exactly.
+- **WorldEdit 7.2.20** `MCEditSchematicReader` and `LegacyMapper` imported a generated legacy `.schematic` and reconstructed all 10,243 test payload bytes exactly. A headless platform supplied WorldEdit's bundled registries; no block decoding was mocked.
+- Independently generated Litemapy/nbtlib fixtures decode byte-exactly. Fixture provenance and hashes are in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md).
+
+**Not verified:** in-game Litematica import, world placement, and placement-to-re-export through the targeted mods. The available installation has no configured test world/mod environment. External library re-export is not a substitute for that check. Own round trips alone do not prove compatibility.
+
+## Changes
+
+- Added the dependency-free encode/decode CLI, encoding version 1, deterministic layouts, indexed concurrent recovery, pinned schematic adapters, and no-overwrite output handling.
 
 ## License
 
