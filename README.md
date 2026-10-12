@@ -33,14 +33,14 @@ Flags precede positional arguments. Decode creates the destination directory whe
 
 | Mode | Output formats | Default layout | Recovery guarantee |
 |---|---|---|---|
-| `dense` (version 2) | `.litematic` | `compact` | Byte-exact through Schemata's own writer/reader only |
+| `dense` (writes version 3; reads 2 and 3) | `.litematic` | `compact` | Byte-exact through Schemata's own writer/reader only |
 | `concrete` (version 1) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
 
 With no `--encoding`, `.litematic` selects dense and `.schematic` selects concrete. Explicit `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding concrete` retains concrete `.litematic` output. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
 
 Dense uses all **24,135 registered vanilla Java 1.20.1 complete block states**, including directional/transient states and three distinct air types, plus native banner base colors, properties, and ordered zero-through-six-layer pattern/color lists. All **41 native pattern hashes** accepted by the pinned game parser are included, including explicit base pattern `b`; repeated or obscured layers are data. The combinatorial alphabet has **25,540,862,200,767,107,655 symbols**, ranked without materializing combinations. [Catalog provenance and reproducible independent validation](internal/alphabet/PROVENANCE.md).
 
-Dense version 2 has one fixed 46-position concrete bootstrap followed by independently decodable 256-byte base-N chunks. Header lengths preserve empty payloads and leading/trailing zeros; CRC-32/IEEE covers only payload bytes. Arbitrary positive dimensions include every air position. Padding is canonical rank zero (`acacia_button` with pinned properties), not white concrete or an end marker. [Frozen wire specification and conversion measurements](docs/dense-wire.md).
+Dense version 3 has one fixed 46-position concrete bootstrap followed by independently decodable 256-byte chunks. It uses the full banner/state alphabet while the banner NBT budget permits, then falls back within dense mode to the 23,815 nonbanner ordinary states. Each chunk records its radix choice in an ordinary-state marker; it never silently switches to concrete or raises resource limits. Header lengths preserve empty payloads and leading/trailing zeros; CRC-32/IEEE covers only payload bytes. Arbitrary positive dimensions include every air position. Padding is canonical rank zero (`acacia_button` with pinned properties), not white concrete or an end marker. [Version 3 fallback specification](docs/dense-v3.md); [version 2 wire specification and conversion measurements](docs/dense-wire.md). Existing version 2 files remain readable.
 
 **Dense is schematic-only.** No recovery guarantee after placement, ticking, chunk reload, world export, or external-tool re-saving. Unsupported or unstable world states remain eligible symbols. Larger palettes and banner NBT may increase compressed file size; the objective is more bytes per block position, not smaller files. Only native banner patterns carry additional data; arbitrary inventories, text, or custom NBT do not.
 
@@ -88,7 +88,7 @@ Select exactly the rectangular volume, without surrounding air. Translation is s
 
 Decode uses bounded workers (1–256), assembling independent concrete units or dense chunks by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected, including stored traversal names when a replacement is requested. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
 
-Independent resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense banner entities can exhaust the NBT budget well before the payload ceiling. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
+Independent resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense version 3 reserves palette/scaffolding nodes and bounds banner use, converting remaining chunks with ordinary nonbanner states. Lower-density fallback uses more positions; the payload ceiling still does not guarantee every layout fits independent limits. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
 
 ## Verification
 
@@ -103,7 +103,7 @@ Verified for the dense expansion on Windows with Go 1.24.1:
 - Integration and race-enabled integration suites passed, including all ordinary catalog states through serialization, banner ordering/boundaries, distinct air states, arbitrary dense dimensions, layout/resource constraints, indexed worker recovery, malformed data, and existing concrete fixtures.
 - Actual built CLI: dense `.litematic`, concrete `.litematic`, and concrete `.schematic` × all three layouts × one/four workers recovered a 4,356-byte UTF-8-named payload byte-exactly, including trailing zeros. Also exercised empty dense files, schematic-as-payload, defaults, explicit dense legacy rejection, and encode/decode collisions.
 - Controlled dense CLI fixtures recovered byte-exactly after palette/key reordering, compression changes, nonpayload metadata changes, translation, and signed sizes. CRC corruption and a missing banner entity failed without creating a destination.
-- Actual CLI rejected unknown dense version 3 and a 256 KiB input exceeding the banner NBT node budget without publishing output. The 32 MiB payload ceiling is not a promise that banner-heavy encodings fit independent NBT limits.
+- Dense version 3 actual CLI encoded the previously failing 1,628,423-byte document and recovered it byte-exactly with 1 and 4 workers, without changing NBT node limits. Regression coverage preserves version 2 recovery and rejects invalid chunk markers.
 - Catalog acquisition independently matched official generated reports against the live Mojang registry; native banner parsing exercised all 41 hashes × 16 colors × lengths 0–6. See [catalog provenance](internal/alphabet/PROVENANCE.md).
 
 Historical **concrete-only** external verification (not rerun for this expansion): Litemapy 0.11.0b0 import/translated re-export and WorldEdit 7.2.20 legacy import. Independently generated concrete fixtures and exact provenance remain in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md). These results do not establish dense interoperability.
@@ -114,6 +114,7 @@ Historical **concrete-only** external verification (not rerun for this expansion
 
 - Added the dependency-free encode/decode CLI, encoding version 1, deterministic layouts, indexed concurrent recovery, pinned schematic adapters, and no-overwrite output handling.
 - Added dense encoding version 2 with the complete pinned Java 1.20.1 alphabet, compact banner ranking, fixed bounded chunks, banner-aware Litematica serialization, arbitrary dense dimensions, mode-specific defaults, and automatic encoding dispatch. Preserved concrete version 1 in both formats.
+- Added dense version 3 resource-aware full-alphabet/nonbanner chunk fallback to balance banner NBT cost with ordinary-state density. Retained version 2 and concrete version 1 decoding.
 
 ## License
 

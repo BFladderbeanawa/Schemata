@@ -94,7 +94,7 @@ func TestDenseRejectsCorruptionAndImpossibleLengths(t *testing.T) {
 		alter func(*volume.Volume)
 		want  string
 	}{
-		{name: "unknown version", alter: func(v *volume.Volume) { denseSetHeaderByte(t, v, 8, 3) }, want: "unsupported encoding version"},
+		{name: "unknown version", alter: func(v *volume.Volume) { denseSetHeaderByte(t, v, 8, 4) }, want: "unsupported encoding version"},
 		{name: "payload over limit", alter: func(v *volume.Volume) {
 			var b [8]byte
 			binary.BigEndian.PutUint64(b[:], MaxDensePayload+1)
@@ -127,7 +127,10 @@ func TestDensePaddingAndUnsafeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	used := denseGeometry().positions(7)
+	_, used, err := planDenseChunks([]byte{0, 0}, "x.bin", denseGeometry(), ordinaryFallback())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if used >= len(v.Blocks) {
 		t.Fatal("fixture has no padding")
 	}

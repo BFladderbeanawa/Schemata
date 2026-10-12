@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	denseVersion    = 2
+	denseVersion    = 3
 	denseBootstrap  = prefixBytes * 2
 	denseChunkBytes = 256
 	MaxDensePayload = 32 * 1024 * 1024
@@ -33,8 +33,10 @@ type chunkGeometry struct {
 	digits [denseChunkBytes + 1]int
 }
 
-func denseGeometry() chunkGeometry {
-	g := chunkGeometry{base: alphabet.Count()}
+func denseGeometry() chunkGeometry { return radixGeometry(alphabet.Count()) }
+
+func radixGeometry(base *big.Int) chunkGeometry {
+	g := chunkGeometry{base: base}
 	power := big.NewInt(1)
 	limit := big.NewInt(1)
 	for b := 1; b <= denseChunkBytes; b++ {
@@ -59,7 +61,7 @@ func (g chunkGeometry) chunk(length, index int) (int, int, int) {
 	return start, bytes, position
 }
 
-// EncodeDense writes the version 2 bootstrap and bounded base-N chunks.
+// EncodeDense writes version 3 chunks with resource-aware nonbanner fallback.
 // Only .litematic can serialize the returned arbitrary-state volume.
 func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volume, error) {
 	if err := validateName(name); err != nil {
@@ -72,8 +74,13 @@ func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volum
 		return volume.Volume{}, fmt.Errorf("dense payload exceeds 32 MiB limit")
 	}
 	g := denseGeometry()
+	fallback := ordinaryFallback()
 	length := len(name) + len(payload)
-	v, err := layout.SelectDense(g.positions(length), opts)
+	plan, required, err := planDenseChunks(payload, name, g, fallback)
+	if err != nil {
+		return volume.Volume{}, err
+	}
+	v, err := layout.SelectDense(required, opts)
 	if err != nil {
 		return volume.Volume{}, fmt.Errorf("select dense layout: %w", err)
 	}
@@ -85,7 +92,6 @@ func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volum
 	v.Palette = make([]volume.State, 0)
 	v.Banners = make(map[int][]volume.Layer)
 	palette := make(map[uint64]uint32)
-	bannerNodes := 0
 	put := func(position int, rank *big.Int) error {
 		state, layers, err := alphabet.Unrank(rank)
 		if err != nil {
@@ -104,10 +110,6 @@ func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volum
 		}
 		v.Blocks[position] = index
 		if alphabet.IsBanner(state) {
-			bannerNodes += 7 + 3*len(layers)
-			if bannerNodes > 262144 {
-				return fmt.Errorf("dense banner NBT node limit exceeded")
-			}
 			v.Banners[position] = layers
 		}
 		return nil
@@ -156,14 +158,28 @@ func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volum
 						chunk[offset] = payload[logical-len(name)]
 					}
 				}
-				results[worker] = bytesToSymbols(chunk[:bytes], g)
+				geometry := g
+				if plan[first+worker].fallback {
+					geometry = fallback.geometry
+				}
+				results[worker] = bytesToSymbols(chunk[:bytes], geometry)
 			}()
 		}
 		wg.Wait()
 		for worker, digits := range results {
-			_, _, position := g.chunk(length, first+worker)
+			selected := plan[first+worker]
+			marker := int64(0)
+			if selected.fallback {
+				marker = 1
+			}
+			if err := put(selected.position, big.NewInt(marker)); err != nil {
+				return volume.Volume{}, err
+			}
 			for offset, rank := range digits {
-				if err := put(position+offset, rank); err != nil {
+				if selected.fallback {
+					rank = big.NewInt(int64(fallback.ranks[rank.Int64()]))
+				}
+				if err := put(selected.position+1+offset, rank); err != nil {
 					return volume.Volume{}, err
 				}
 			}
@@ -225,7 +241,7 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	if string(header[:8]) != magic {
 		return File{}, fmt.Errorf("invalid SCHEMATA header")
 	}
-	if header[8] != denseVersion {
+	if header[8] != 2 && header[8] != denseVersion {
 		return File{}, fmt.Errorf("unsupported encoding version %d", header[8])
 	}
 	payloadLength := binary.BigEndian.Uint64(header[9:17])
@@ -238,10 +254,6 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	}
 	length := nameLength + int(payloadLength)
 	g := denseGeometry()
-	used := g.positions(length)
-	if used > len(v.Blocks) {
-		return File{}, fmt.Errorf("truncated dense chunks or payload")
-	}
 	// Rank palette states once; banner positions override the ordinary rank.
 	ranks := make([]*big.Int, len(v.Palette))
 	for i, state := range v.Palette {
@@ -264,6 +276,15 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 			return rank
 		}
 		return ranks[v.Blocks[position]]
+	}
+	plan, used, err := scanDenseChunks(length, len(v.Blocks), header[8], rankAt)
+	if err != nil {
+		return File{}, err
+	}
+	fallback := ordinaryFallback()
+	fallbackRanks := make([]*big.Int, len(fallback.ranks))
+	for i := range fallbackRanks {
+		fallbackRanks[i] = big.NewInt(int64(i))
 	}
 	for position := used; position < len(v.Blocks); position++ {
 		if position%4096 == 0 {
@@ -288,17 +309,39 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	for range workers {
 		go func() {
 			defer wg.Done()
-			symbols := make([]*big.Int, g.digits[denseChunkBytes])
+			symbols := make([]*big.Int, fallback.geometry.digits[denseChunkBytes])
 			for workCtx.Err() == nil {
 				index := int(next.Add(1) - 1)
 				if index >= chunks {
 					return
 				}
-				start, bytes, position := g.chunk(length, index)
-				for offset := range g.digits[bytes] {
-					symbols[offset] = rankAt(position + offset)
+				start, bytes, _ := g.chunk(length, index)
+				selected := plan[index]
+				geometry := g
+				if selected.fallback {
+					geometry = fallback.geometry
 				}
-				if err := symbolsToBytes(stream[start:start+bytes], symbols[:g.digits[bytes]], g); err != nil {
+				var conversionError error
+				for offset := range geometry.digits[bytes] {
+					rank := rankAt(selected.position + offset)
+					if selected.fallback {
+						if !rank.IsInt64() || rank.Int64() >= int64(len(fallback.indices)) {
+							conversionError = fmt.Errorf("invalid fallback symbol")
+							break
+						}
+						mapped := fallback.indices[rank.Int64()]
+						if mapped < 0 {
+							conversionError = fmt.Errorf("banner in fallback chunk")
+							break
+						}
+						rank = fallbackRanks[mapped]
+					}
+					symbols[offset] = rank
+				}
+				if conversionError == nil {
+					conversionError = symbolsToBytes(stream[start:start+bytes], symbols[:geometry.digits[bytes]], geometry)
+				}
+				if err := conversionError; err != nil {
 					failureOnce.Do(func() { failure = fmt.Errorf("dense chunk %d: %w", index, err); cancel() })
 					return
 				}

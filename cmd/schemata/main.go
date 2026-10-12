@@ -75,6 +75,7 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	padding := fs.Int("padding-percent", 25, "bounded layout extra positions/units as percent of required capacity (0–100)")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata encode [flags] input-file output.litematic|output.schematic")
+		fmt.Fprintln(help, "dense balances banner NBT cost with automatic ordinary-state chunk fallback; remains .litematic")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
