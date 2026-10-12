@@ -19,6 +19,8 @@ func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
 		{name: "padding overflow", args: []string{"encode", "--layout", "bounded", "--padding-percent", "101", "missing.bin", "out.litematic"}},
 		{name: "unsupported output", args: []string{"encode", "missing.bin", "out.schem"}},
 		{name: "dense legacy output", args: []string{"encode", "--encoding", "dense", "missing.bin", "out.schematic"}},
+		{name: "banners with concrete", args: []string{"encode", "--encoding", "concrete", "--banners", "missing.bin", "out.litematic"}},
+		{name: "banners with legacy output", args: []string{"encode", "--banners", "missing.bin", "out.schematic"}},
 		{name: "unknown encoding", args: []string{"encode", "--encoding", "other", "missing.bin", "out.litematic"}},
 		{name: "empty encoding", args: []string{"encode", "--encoding", "", "missing.bin", "out.litematic"}},
 		{name: "no workers", args: []string{"decode", "--workers", "0", "missing.litematic", "out"}},

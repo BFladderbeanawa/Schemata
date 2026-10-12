@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/bfladderbeanawa/schemata/internal/alphabet"
-	"github.com/bfladderbeanawa/schemata/internal/layout"
 	"github.com/bfladderbeanawa/schemata/internal/schematic"
 	"github.com/bfladderbeanawa/schemata/internal/volume"
 )
@@ -22,7 +21,7 @@ import (
 func TestDenseFallbackRecoversWithoutExceedingNBTBudget(t *testing.T) {
 	t.Parallel()
 	payload := bytes.Repeat([]byte{255, 17, 0, 173, 91}, 20000)
-	v, err := EncodeDense(payload, "data.bin", layout.Options{})
+	v, err := EncodeDense(payload, "data.bin", DenseOptions{Banners: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,12 +129,12 @@ func TestDenseFallbackDeterministicAcrossScheduling(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
 	payload := bytes.Repeat([]byte{0, 173, 255, 31}, 25000)
-	a, err := EncodeDense(payload, "data.bin", layout.Options{})
+	a, err := EncodeDense(payload, "data.bin", DenseOptions{Banners: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime.GOMAXPROCS(4)
-	b, err := EncodeDense(payload, "data.bin", layout.Options{})
+	b, err := EncodeDense(payload, "data.bin", DenseOptions{Banners: true})
 	if err != nil {
 		t.Fatal(err)
 	}

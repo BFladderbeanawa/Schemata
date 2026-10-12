@@ -71,11 +71,12 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	fs.SetOutput(help)
 	height := fs.Int("max-height", 64, "height cap: multiple of 16 from 16 through 384 blocks")
 	mode := fs.String("encoding", "", "dense (.litematic default) or concrete (.schematic default)")
-	policy := fs.String("layout", "", "compact (dense default), balanced (concrete default), or bounded")
+	banners := fs.Bool("banners", false, "enable banner symbols in dense encoding (disabled by default)")
+	policy := fs.String("layout", "", "balanced (default), compact (minimum positions/units), or bounded")
 	padding := fs.Int("padding-percent", 25, "bounded layout extra positions/units as percent of required capacity (0–100)")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata encode [flags] input-file output.litematic|output.schematic")
-		fmt.Fprintln(help, "dense balances banner NBT cost with automatic ordinary-state chunk fallback; remains .litematic")
+		fmt.Fprintln(help, "dense defaults to nonbanner states; --banners enables the full alphabet with resource-aware fallback")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -115,6 +116,9 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if *mode == "dense" && ext != ".litematic" {
 		return "", true, errors.New("dense encoding requires .litematic output")
 	}
+	if *banners && *mode != "dense" {
+		return "", true, errors.New("banners require dense encoding")
+	}
 	opts := layout.Options{MaxHeight: *height, Policy: *policy, PaddingPercent: *padding}
 	selectLayout := layout.Select
 	if *mode == "dense" {
@@ -127,11 +131,12 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if err != nil {
 		return "", false, err
 	}
-	encodeFile := codec.Encode
+	var v volume.Volume
 	if *mode == "dense" {
-		encodeFile = codec.EncodeDense
+		v, err = codec.EncodeDense(payload, filepath.Base(fs.Arg(0)), codec.DenseOptions{Layout: opts, Banners: *banners})
+	} else {
+		v, err = codec.Encode(payload, filepath.Base(fs.Arg(0)), opts)
 	}
-	v, err := encodeFile(payload, filepath.Base(fs.Arg(0)), opts)
 	if err != nil {
 		return "", false, err
 	}

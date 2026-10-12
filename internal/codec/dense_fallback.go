@@ -34,13 +34,19 @@ type denseChunk struct {
 	fallback bool
 }
 
-func planDenseChunks(payload []byte, name string, full chunkGeometry, fallback fallbackAlphabet) ([]denseChunk, int, error) {
+func planDenseChunks(
+	payload []byte,
+	name string,
+	full chunkGeometry,
+	fallback fallbackAlphabet,
+	banners bool,
+) ([]denseChunk, int, error) {
 	length := len(name) + len(payload)
 	chunks := (length + denseChunkBytes - 1) / denseChunkBytes
 	plan := make([]denseChunk, chunks)
 	position := denseBootstrap
 	remaining := denseBannerBudget
-	useFallback := false
+	useFallback := !banners
 	var data [denseChunkBytes]byte
 	for index := range chunks {
 		start, size, _ := full.chunk(length, index)

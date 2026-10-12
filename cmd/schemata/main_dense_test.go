@@ -12,10 +12,62 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/bfladderbeanawa/schemata/internal/alphabet"
 	"github.com/bfladderbeanawa/schemata/internal/codec"
 	"github.com/bfladderbeanawa/schemata/internal/layout"
 	"github.com/bfladderbeanawa/schemata/internal/schematic"
 )
+
+func TestDenseCLIBannerOptIn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		flags   []string
+		banners bool
+	}{
+		{name: "default"},
+		{name: "explicit dense", flags: []string{"--encoding", "dense"}},
+		{name: "disabled", flags: []string{"--banners=false"}},
+		{name: "enabled", flags: []string{"--banners"}, banners: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			input := filepath.Join(dir, "data.bin")
+			payload := bytes.Repeat([]byte{0, 255, 173, 31, 0}, 205)
+			if err := os.WriteFile(input, payload, 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "data.litematic")
+			args := append([]string{"encode"}, tc.flags...)
+			execute(t, append(args, input, path), 0)
+			v, err := readStructure(path, ".litematic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.X != v.Z || v.Y != min(v.X, 64) {
+				t.Fatalf("default layout is not a balanced cuboid: (%d,%d,%d)", v.X, v.Y, v.Z)
+			}
+			if (len(v.Banners) > 0) != tc.banners {
+				t.Fatalf("banner entities = %d, enabled = %v", len(v.Banners), tc.banners)
+			}
+			if !tc.banners {
+				for _, state := range v.Palette {
+					if alphabet.IsBanner(state) {
+						t.Fatalf("disabled banner state: %s", state.Name)
+					}
+				}
+			}
+			for _, workers := range []string{"1", "4"} {
+				dest := filepath.Join(dir, "out"+workers)
+				execute(t, []string{"decode", "--workers", workers, path, dest}, 0)
+				got, err := os.ReadFile(filepath.Join(dest, "data.bin"))
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("workers %s: byte-exact recovery: %v", workers, err)
+				}
+			}
+		})
+	}
+}
 
 func TestDenseCLIEmptyAndLayoutRecovery(t *testing.T) {
 	t.Parallel()
@@ -40,7 +92,7 @@ func TestDenseCLIEmptyAndLayoutRecovery(t *testing.T) {
 func TestDenseCLICorruptionPublishesNothing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	v, err := codec.EncodeDense(bytes.Repeat([]byte{1, 2, 0, 255}, 100), "data.bin", layout.Options{})
+	v, err := codec.EncodeDense(bytes.Repeat([]byte{1, 2, 0, 255}, 100), "data.bin", codec.DenseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,12 +112,13 @@ func TestDenseLogicalStructureIndependentOfScheduling(t *testing.T) {
 	old := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(old)
 	payload := bytes.Repeat([]byte{0, 255, 17, 0, 173}, 409)
-	a, err := codec.EncodeDense(payload, "data.bin", layout.Options{Policy: "bounded", PaddingPercent: 25})
+	opts := codec.DenseOptions{Layout: layout.Options{Policy: "bounded", PaddingPercent: 25}}
+	a, err := codec.EncodeDense(payload, "data.bin", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime.GOMAXPROCS(4)
-	b, err := codec.EncodeDense(payload, "data.bin", layout.Options{Policy: "bounded", PaddingPercent: 25})
+	b, err := codec.EncodeDense(payload, "data.bin", opts)
 	if err != nil {
 		t.Fatal(err)
 	}

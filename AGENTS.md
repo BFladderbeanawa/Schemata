@@ -45,7 +45,7 @@ Required interface:
 
 - `encode`: input file, output schematic path, `--encoding`, `--max-height`, `--layout`, and the bounded-layout padding option. Select the schematic format from `.litematic` or `.schematic`; reject unsupported extensions.
 - `decode`: input schematic, destination directory, optional `--filename`, and `--workers`. Detect the Schemata encoding from its in-structure identifier/version, not payload content or user recollection of encode settings.
-- Dense `.litematic` defaults to `compact` layout. Concrete retains its existing `balanced` default. An explicit layout overrides the mode-specific default.
+- Dense `.litematic` and concrete default to `balanced` layout, prioritizing a three-dimensional rectangular shape. An explicit layout overrides the default; `compact` remains available for minimum-position/unit output and can produce long, thin rectangles.
 - Flags precede positional arguments. Report actual output paths. Preserve the original extension as part of the stored basename.
 
 Never overwrite an existing destination, for either command. On a collision, append a numeric suffix before the final extension: `report.pdf`, `report (1).pdf`, `report (2).pdf`. A user-selected filename follows the same policy. Destination selection must remain no-overwrite if another process creates a file concurrently.

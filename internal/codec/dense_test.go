@@ -31,7 +31,7 @@ func TestDenseByteExactBoundaries(t *testing.T) {
 			if len(payload) > 0 {
 				payload[len(payload)-1] = 0
 			}
-			v, err := EncodeDense(payload, "é.bin", layout.Options{})
+			v, err := EncodeDense(payload, "é.bin", DenseOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,7 +52,7 @@ func TestDenseHeaderFilenameCrossesChunkBoundary(t *testing.T) {
 	t.Parallel()
 	name := strings.Repeat("x", 253) + ".bin"
 	payload := []byte{0, 0, 173, 255, 0, 0}
-	v, err := EncodeDense(payload, name, layout.Options{})
+	v, err := EncodeDense(payload, name, DenseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestDenseRejectsCorruptionAndImpossibleLengths(t *testing.T) {
 		{name: "truncated blocks", alter: func(v *volume.Volume) { v.Blocks = v.Blocks[:len(v.Blocks)-1] }, want: "block count"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v, err := EncodeDense([]byte{0, 1, 2, 0}, "x.bin", layout.Options{})
+			v, err := EncodeDense([]byte{0, 1, 2, 0}, "x.bin", DenseOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,11 +123,11 @@ func TestDenseRejectsCorruptionAndImpossibleLengths(t *testing.T) {
 
 func TestDensePaddingAndUnsafeName(t *testing.T) {
 	t.Parallel()
-	v, err := EncodeDense([]byte{0, 0}, "x.bin", layout.Options{Policy: "balanced"})
+	v, err := EncodeDense([]byte{0, 0}, "x.bin", DenseOptions{Layout: layout.Options{Policy: "balanced"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, used, err := planDenseChunks([]byte{0, 0}, "x.bin", denseGeometry(), ordinaryFallback())
+	_, used, err := planDenseChunks([]byte{0, 0}, "x.bin", denseGeometry(), ordinaryFallback(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDensePaddingAndUnsafeName(t *testing.T) {
 		t.Fatalf("invalid padding: %v", err)
 	}
 	for _, name := range []string{"../x", "..", "/root", "a\\b"} {
-		if _, err := EncodeDense(nil, name, layout.Options{}); err == nil {
+		if _, err := EncodeDense(nil, name, DenseOptions{}); err == nil {
 			t.Fatalf("unsafe name %q accepted", name)
 		}
 	}

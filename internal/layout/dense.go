@@ -7,7 +7,7 @@ import (
 )
 
 // SelectDense chooses arbitrary positive block dimensions without allocating
-// position data. Empty Policy selects compact; zero MaxHeight selects 64 blocks.
+// position data. Empty Policy selects balanced; zero MaxHeight selects 64 blocks.
 // requiredPositions must include all codec overhead and fit volume.MaxBlocks.
 // See docs/dense-layout.md for the balance metric and deterministic tie rules.
 func SelectDense(requiredPositions int, opts Options) (volume.Volume, error) {
@@ -25,7 +25,7 @@ func SelectDense(requiredPositions int, opts Options) (volume.Volume, error) {
 		return volume.Volume{}, fmt.Errorf("padding percent must be from 0 through 100")
 	}
 	if opts.Policy == "" {
-		opts.Policy = "compact"
+		opts.Policy = "balanced"
 	}
 	if opts.Policy == "balanced" {
 		for side := 1; ; side++ {

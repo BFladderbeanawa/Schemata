@@ -61,9 +61,17 @@ func (g chunkGeometry) chunk(length, index int) (int, int, int) {
 	return start, bytes, position
 }
 
-// EncodeDense writes version 3 chunks with resource-aware nonbanner fallback.
+// DenseOptions controls layout and whether banner symbols are eligible.
+// The zero value uses balanced layout and only nonbanner states.
+type DenseOptions struct {
+	Layout  layout.Options
+	Banners bool
+}
+
+// EncodeDense writes version 3 chunks, using only nonbanner states by default.
+// Banners enables the full alphabet with resource-aware nonbanner fallback.
 // Only .litematic can serialize the returned arbitrary-state volume.
-func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volume, error) {
+func EncodeDense(payload []byte, name string, opts DenseOptions) (volume.Volume, error) {
 	if err := validateName(name); err != nil {
 		return volume.Volume{}, fmt.Errorf("encode filename: %w", err)
 	}
@@ -76,11 +84,11 @@ func EncodeDense(payload []byte, name string, opts layout.Options) (volume.Volum
 	g := denseGeometry()
 	fallback := ordinaryFallback()
 	length := len(name) + len(payload)
-	plan, required, err := planDenseChunks(payload, name, g, fallback)
+	plan, required, err := planDenseChunks(payload, name, g, fallback, opts.Banners)
 	if err != nil {
 		return volume.Volume{}, err
 	}
-	v, err := layout.SelectDense(required, opts)
+	v, err := layout.SelectDense(required, opts.Layout)
 	if err != nil {
 		return volume.Volume{}, fmt.Errorf("select dense layout: %w", err)
 	}

@@ -8,6 +8,28 @@ import (
 	"github.com/bfladderbeanawa/schemata/internal/volume"
 )
 
+func TestSelectDenseAvoidsDegenerateRectangles(t *testing.T) {
+	t.Parallel()
+	for _, required := range []int{67, 903335} {
+		t.Run(fmt.Sprintf("positions%d", required), func(t *testing.T) {
+			got, err := layout.SelectDense(required, layout.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.X != got.Z || got.Y != min(got.X, 64) {
+				t.Fatalf("degenerate rectangle: (%d,%d,%d)", got.X, got.Y, got.Z)
+			}
+			if got.X*got.Y*got.Z < required {
+				t.Fatal("rectangle cannot hold stream")
+			}
+			previous := got.X - 1
+			if previous*min(previous, 64)*previous >= required {
+				t.Fatal("rectangle wastes a complete outer layer")
+			}
+		})
+	}
+}
+
 func TestSelectDenseLayouts(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -17,14 +39,19 @@ func TestSelectDenseLayouts(t *testing.T) {
 		x, y, z   int
 	}{
 		{name: "single position", positions: 1, x: 1, y: 1, z: 1},
-		{name: "default compact", positions: 9, x: 1, y: 3, z: 3},
-		{name: "prime within height", positions: 61, x: 1, y: 61, z: 1},
-		{name: "prime beyond height", positions: 67, x: 1, y: 1, z: 67},
-		{name: "prime explicit cap", positions: 17, opts: layout.Options{MaxHeight: 16}, x: 1, y: 1, z: 17},
-		{name: "prime larger cap", positions: 67, opts: layout.Options{MaxHeight: 80}, x: 1, y: 67, z: 1},
+		{name: "prime within height", positions: 61, opts: layout.Options{Policy: "compact"}, x: 1, y: 61, z: 1},
+		{name: "prime beyond height", positions: 67, opts: layout.Options{Policy: "compact"}, x: 1, y: 1, z: 67},
+		{
+			name: "prime explicit cap", positions: 17,
+			opts: layout.Options{Policy: "compact", MaxHeight: 16}, x: 1, y: 1, z: 17,
+		},
+		{
+			name: "prime larger cap", positions: 67,
+			opts: layout.Options{Policy: "compact", MaxHeight: 80}, x: 1, y: 67, z: 1,
+		},
 		{name: "compact height tie", positions: 6, opts: layout.Options{Policy: "compact"}, x: 1, y: 3, z: 2},
-		{name: "compact horizontal tie", positions: 72, x: 3, y: 6, z: 4},
-		{name: "compact cube", positions: 64, x: 4, y: 4, z: 4},
+		{name: "compact horizontal tie", positions: 72, opts: layout.Options{Policy: "compact"}, x: 3, y: 6, z: 4},
+		{name: "compact cube", positions: 64, opts: layout.Options{Policy: "compact"}, x: 4, y: 4, z: 4},
 		{name: "balanced cube", positions: 9, opts: layout.Options{Policy: "balanced"}, x: 3, y: 3, z: 3},
 		{
 			name: "balanced capped", positions: 4097,
