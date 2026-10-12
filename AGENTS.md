@@ -94,6 +94,8 @@ Use bounded, independently decodable chunks. Chunk boundaries and conversion rul
 
 For each chunk, define deterministic reversible conversion between bytes and base-N symbols, where N is the pinned alphabet cardinality. Preserve leading and trailing zero bytes. Validate declared lengths and numeric ranges before allocating or converting. Accept the documented per-chunk rounding overhead instead of whole-file unbounded integer conversion.
 
+Dense encoding must balance banner density against native NBT resources. When another full-alphabet chunk would exhaust the banner budget, fall back within dense mode to a documented ordinary nonbanner-state chunk alphabet instead of failing solely on banner-node exhaustion. Record each chunk's radix choice in the structure under a new encoding version; keep logical byte boundaries deterministic and retain decoding of earlier versions. Full-alphabet chunks keep every registered symbol eligible; the fallback must not silently switch to concrete or raise independent resource limits.
+
 Use one file header containing the original payload length, UTF-8 filename byte length and basename, and CRC-32/IEEE over payload bytes only. Exclude header and padding from CRC32. Support empty files and recover exactly the declared payload length; never trim real zero bytes.
 
 Dense padding is a specified canonical representation, not necessarily white concrete. Air is data, not a missing position or end marker. Validate padding rather than inferring payload length from occupied blocks.
