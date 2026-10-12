@@ -174,7 +174,7 @@ func TestDensePartSchematicRoundTrip(t *testing.T) {
 					return rank
 				}
 				plan, _, err := scanDenseChunks(
-					len("original.zip")+denseManifestBytes+len(tc.payload),
+					len("original.zip")+partManifestBytes+len(tc.payload),
 					len(v.Blocks),
 					densePartVersion,
 					rankAt,

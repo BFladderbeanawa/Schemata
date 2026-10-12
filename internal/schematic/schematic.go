@@ -199,8 +199,8 @@ func readLitematic(root tag) (volume.Volume, error) {
 		return volume.Volume{}, fmt.Errorf("invalid packed block state length")
 	}
 	// Identification uses actual concrete names, never palette indices. Dense
-	// versions use native traversal; version 1 keeps the historical unit path.
-	if !unitConcreteV1Bootstrap(palette.list, states.raw, size, width) &&
+	// versions use native traversal; versions 1/5 keep the historical unit path.
+	if !unitConcreteBootstrap(palette.list, states.raw, size, width) &&
 		nativeDenseBootstrap(palette.list, states.raw, n, width) {
 		return readDenseLitematic(region, size, palette.list, states.raw)
 	}

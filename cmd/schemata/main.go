@@ -74,7 +74,7 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	banners := fs.Bool("banners", false, "enable banner symbols in dense encoding (disabled by default)")
 	policy := fs.String("layout", "", "balanced (default), compact (minimum positions/units), or bounded")
 	padding := fs.Int("padding-percent", 25, "bounded layout extra positions/units as percent of required capacity (0–100)")
-	partSize := fs.Int("part-size-mib", 16, "dense multipart payload per volume (1–32 MiB); explicit flag forces multipart")
+	partSize := fs.Int("part-size-mib", 16, "multipart payload per volume (1–32 MiB); concrete caps to header/manifest capacity; explicit flag forces multipart")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata encode [flags] input-file output.litematic|output.schematic")
 		fmt.Fprintln(help, "dense defaults to nonbanner states; --banners enables the full alphabet with resource-aware fallback")
@@ -123,9 +123,6 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if *partSize < 1 || *partSize > 32 {
 		return "", true, errors.New("part size must be from 1 through 32 MiB")
 	}
-	if partSizeSet && *mode != "dense" {
-		return "", true, errors.New("multipart encoding requires dense .litematic output")
-	}
 	opts := layout.Options{MaxHeight: *height, NoHeightLimit: *height == 0, Policy: *policy, PaddingPercent: *padding}
 	selectLayout := layout.Select
 	if *mode == "dense" {
@@ -138,13 +135,18 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if err != nil {
 		return "", false, fmt.Errorf("stat input: %w", err)
 	}
-	if *mode == "dense" && (partSizeSet || info.Size() > codec.MaxDensePayload) {
+	if needsMultipart(info.Size(), filepath.Base(fs.Arg(0)), *mode, partSizeSet) {
 		path, err := encodeParts(
 			ctx,
 			fs.Arg(0),
 			fs.Arg(1),
-			*partSize*1024*1024,
-			codec.DenseOptions{Layout: opts, Banners: *banners},
+			partsOptions{
+				Encoding:  *mode,
+				Extension: ext,
+				Layout:    opts,
+				Banners:   *banners,
+				PartSize:  *partSize * 1024 * 1024,
+			},
 		)
 		return path, false, err
 	}

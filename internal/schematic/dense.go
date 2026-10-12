@@ -28,7 +28,7 @@ func concreteName(name string) (byte, bool) {
 	return 0, false
 }
 
-func unitConcreteV1Bootstrap(palette []tag, raw []byte, size [3]int, width int) bool {
+func unitConcreteBootstrap(palette []tag, raw []byte, size [3]int, width int) bool {
 	if _, err := volume.Count(size[0], size[1], size[2]); err != nil {
 		return false
 	}
@@ -55,7 +55,7 @@ func unitConcreteV1Bootstrap(palette []tag, raw []byte, size [3]int, width int) 
 		}
 		prefix[i/2] |= color << uint(4*(1-i%2))
 	}
-	return string(prefix[:8]) == "SCHEMATA" && prefix[8] == 1
+	return string(prefix[:8]) == "SCHEMATA" && (prefix[8] == 1 || prefix[8] == 5)
 }
 
 func nativeDenseBootstrap(palette []tag, raw []byte, n, width int) bool {

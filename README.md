@@ -32,18 +32,22 @@ Flags precede positional arguments. Decode creates the destination directory whe
 
 ### Large files: streaming multipart
 
-Dense inputs above 32 MiB automatically use multipart output, with 16 MiB payload per volume. Each volume is one balanced rectangular region; no flags are needed for the large-file path. For requested `1.litematic`, output is a collision-free `1.parts` directory containing numbered `.litematic` files. The command prints that directory, not a nonexistent single file. Existing directories receive numeric suffixes.
+Both encodings automatically use streaming multipart output when input exceeds single-volume capacity: 32 MiB payload for dense, or 32 MiB minus the 23-byte header and UTF-8 basename for concrete. Default part payload is 16 MiB. Each volume is one balanced rectangular region; no extra flags are needed for large inputs. For requested `1.litematic` or `1.schematic`, output is a collision-free `1.parts` directory containing numbered files in the requested format. The command prints that directory, not a nonexistent single file. Existing directories receive numeric suffixes.
 
 ```powershell
 .\schemata.exe encode large.zip 1.litematic
 .\schemata.exe decode --workers 4 1.parts recovered
 # Force multipart or choose part size (1–32 MiB):
 .\schemata.exe encode --part-size-mib 8 large.zip archive.litematic
+# Concrete multipart in either format:
+.\schemata.exe encode --encoding concrete --part-size-mib 8 large.zip concrete.litematic
+.\schemata.exe encode --part-size-mib 8 large.zip concrete.schematic
+.\schemata.exe decode --workers 4 concrete.parts recovered
 ```
 
-Decode also accepts any part file when all its siblings are together. Parts may be renamed or reordered; their identity and order are stored inside the structures. Mixed sets, duplicate/missing parts, bad per-part CRC/padding, and aggregate SHA-256/CRC failures prevent publication of a recovered file. `--filename` and numeric collision suffixes apply as usual. Multipart is dense-only; concrete retains its single-volume capacity limit.
+Decode also accepts any part file when all its siblings are together. Parts may be renamed or reordered; their identity and order are stored inside the structures. Mixed sets, duplicate/missing parts, bad per-part CRC/padding, and aggregate SHA-256/CRC failures prevent publication of a recovered file. `--filename` and numeric collision suffixes apply as usual. Explicit `--part-size-mib` forces multipart even for small or empty inputs. Concrete reserves 23 header bytes, the UTF-8 basename, and a 64-byte manifest within its 32 MiB stream capacity; a requested 32 MiB part size is capped accordingly and the effective size is recorded in every part. Dense remains `.litematic` only; concrete supports both adapters.
 
-Encoding hashes the source in a streaming prepass, then reads/encodes/writes one part at a time and checks for source changes. Decode validates parts one at a time into a temporary disk file, verifies the whole file, then publishes through exclusive no-overwrite creation. RAM is bounded by a single part's structures and worker buffers, not total original length; temporary disk must hold the full recovered file. At most 4096 volumes (up to 128 GiB at 32 MiB per part, subject to each volume's independent limits). Keep parts in a dedicated directory. [Version 4 wire specification](docs/dense-v4.md).
+Encoding hashes the source in a streaming prepass, then reads/encodes/writes one part at a time and checks for source changes. Decode validates parts one at a time into a temporary disk file, verifies the whole file, then publishes through exclusive no-overwrite creation. RAM is bounded by a single part's structures and worker buffers, not total original length; temporary disk must hold the full recovered file. At most 4096 volumes (up to 128 GiB for dense at 32 MiB per part; slightly less for concrete due to header/manifest space, subject to independent per-volume limits). Keep parts in a dedicated directory. Wire specifications: [dense version 4](docs/dense-v4.md), [concrete version 5](docs/concrete-v5.md).
 
 
 ## Encoding modes
@@ -51,7 +55,7 @@ Encoding hashes the source in a streaming prepass, then reads/encodes/writes one
 | Mode | Output formats | Default layout | Recovery guarantee |
 |---|---|---|---|
 | `dense` (writes version 3 single-volume / 4 multipart; reads 2–4) | `.litematic` | `balanced` | Byte-exact through Schemata's own writer/reader only |
-| `concrete` (version 1) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
+| `concrete` (version 1 single-volume / 5 multipart) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
 
 With no `--encoding`, `.litematic` selects dense and `.schematic` selects concrete. Explicit `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding concrete` retains concrete `.litematic` output. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
 
@@ -89,7 +93,7 @@ A unit is 16×16×16 blocks (2048 bytes). Traverse complete units in y/x/z order
 
 ## Layout contract
 
-Concrete: `requiredUnits=ceil((23+filenameBytes+payloadBytes)/2048)`. Dimensions are positive multiples of 16. `--max-height` defaults to **384** and accepts multiples of 16 from 16 through 384; it is a cap, not an exact height. `--max-height 0` removes the cap: dense layouts are then bounded only by the 64 Mi position limit, and concrete layouts by the signed-short storage maximum of 32752 blocks (2047 units). An uncapped height can exceed the modern world's 384-block vertical range; that is a layout choice with no placement guarantee.
+Concrete: `requiredUnits=ceil((23+filenameBytes+manifestBytes+payloadBytes)/2048)`, where manifestBytes is 0 for version 1 or 64 for version 5. Dimensions are positive multiples of 16. `--max-height` defaults to **384** and accepts multiples of 16 from 16 through 384; it is a cap, not an exact height. `--max-height 0` removes the cap: dense layouts are then bounded only by the 64 Mi position limit, and concrete layouts by the signed-short storage maximum of 32752 blocks (2047 units). An uncapped height can exceed the modern world's 384-block vertical range; that is a layout choice with no placement guarantee.
 
 - `balanced` (concrete default): choose the smallest integer cube side `s` with `s*s*min(s,heightCapUnits) >= requiredUnits`; use `(s,min(s,heightCapUnits),s)`. This prioritizes similar axes and permits rectangular padding. When that product would exceed the resource limit, balanced selects the minimum-spread rectangle within the limit instead, so a representable capacity is never rejected.
 - `compact`: minimize total units among all feasible rectangles, then minimize the balance metric below.
@@ -105,7 +109,7 @@ Select exactly the rectangular volume, without surrounding air. Translation is s
 
 Decode uses bounded workers (1–256), assembling independent concrete units or dense chunks by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected, including stored traversal names when a replacement is requested. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
 
-Independent per-volume resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense multipart retains these limits for every part and bounds the set to 4096 parts. Dense defaults to nonbanner chunks; with `--banners`, it reserves palette/scaffolding nodes and bounds banner use, converting remaining chunks with ordinary nonbanner states. Lower-density nonbanner chunks use more positions; the payload ceiling still does not guarantee every layout fits independent limits. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
+Independent per-volume resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/manifest/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Both multipart encodings retain these limits for every part and bound the set to 4096 parts. Dense defaults to nonbanner chunks; with `--banners`, it reserves palette/scaffolding nodes and bounds banner use, converting remaining chunks with ordinary nonbanner states. Lower-density nonbanner chunks use more positions; the payload ceiling still does not guarantee every layout fits independent limits. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
 
 ## Verification
 
@@ -124,6 +128,7 @@ Verified for the dense expansion on Windows with Go 1.24.1:
 - Nonbanner-default actual CLI encoded the 1,628,423-byte document with zero banner palette states and zero banner entities, recovering identical bytes with 1 and 4 workers. Also exercised default, `--banners`, `--banners=false`, and concrete `.litematic` recovery on a 1,025-byte payload containing leading/trailing zeros; integration tests passed.
 - Balanced-default actual CLI encoded the same 1,628,423-byte document as one 119×64×119 region (906,304 positions), replacing compact's 1×5×180,667 shape (903,335 positions) with 0.329% additional padding. Recovered byte-exactly with 1 and 4 workers. Explicit compact/bounded and concrete balanced output also recovered; the full integration suite passed.
 - Version 4 actual CLI encoded the 1,995,772,310-byte ZIP into 119 volumes at the default 16 MiB part size. First/last volumes were single 382×64×382 / 374×64×374 regions without banner entities. Full recovery with 1 and 4 workers matched SHA-256 `28f66a30ecbb8de1aa4f22e7f1c32c8326e94c508e5e7026af49747efd7983d5`. Integration and race-enabled suites passed, including renamed/reordered parts, missing/duplicate/mixed/corrupt sets, aggregate-integrity failure, collision safety, empty input and cancellation.
+- Concrete version 5 actual CLI encoded a 33,554,439-byte input in both formats into 3 default-size volumes, recovered byte-exactly with 1 and 4 workers (SHA-256 `873ad5c7c2a40a715b76d22d908a138b98b5faf0cf4f9b5098be14c3c6ebffe1`). Explicit 32 MiB requests produced 2 capped-capacity parts and exact recovery. Also exercised 3-part UTF-8-named recovery, renamed parts, destination/set collisions, replacement names, empty parts, missing/corrupt rejection without destination publication, concrete v1 and dense v4 recovery. Standard, integration and race-enabled integration suites passed. No new external-tool checks were run.
 - Catalog acquisition independently matched official generated reports against the live Mojang registry; native banner parsing exercised all 41 hashes × 16 colors × lengths 0–6. See [catalog provenance](internal/alphabet/PROVENANCE.md).
 
 Historical **concrete-only** external verification (not rerun for this expansion): Litemapy 0.11.0b0 import/translated re-export and WorldEdit 7.2.20 legacy import. Independently generated concrete fixtures and exact provenance remain in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md). These results do not establish dense interoperability.
@@ -139,6 +144,7 @@ Historical **concrete-only** external verification (not rerun for this expansion
 - Changed dense's default layout from compact to balanced for three-dimensional rectangular output. Explicit compact and bounded policies, height/resource limits, logical chunk boundaries, and existing-file decoding are unchanged.
 - Added dense version 4 streaming multipart output and automatic whole-file recovery, preserving per-volume safety limits and versions 1–3 decoding. Large dense inputs no longer fail solely at the single-volume 32 MiB payload ceiling.
 - Raised the `--max-height` default from 64 to **384** blocks (the full modern world height) and made `--max-height 0` remove the cap for taller, cube-like layouts. Balanced layouts whose cube product would exceed the resource limit now fall back to the minimum-spread rectangle inside the limit instead of failing, and uncapped concrete heights stay within signed-short storage.
+- Added concrete version 5 streaming multipart for both `.litematic` and `.schematic`, automatic overflow dispatch, shared bounded streaming recovery, and `--part-size-mib` with header/manifest-aware capacity capping. Preserved concrete version 1 and dense versions 2–4 decoding without raising per-volume limits.
 
 ## License
 

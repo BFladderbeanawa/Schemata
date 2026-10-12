@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"testing"
+
+	"github.com/bfladderbeanawa/schemata/internal/codec"
 )
 
 func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
@@ -23,7 +25,6 @@ func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
 		{name: "banners with legacy output", args: []string{"encode", "--banners", "missing.bin", "out.schematic"}},
 		{name: "zero part size", args: []string{"encode", "--part-size-mib", "0", "missing.bin", "out.litematic"}},
 		{name: "excess part size", args: []string{"encode", "--part-size-mib", "33", "missing.bin", "out.litematic"}},
-		{name: "concrete multipart", args: []string{"encode", "--encoding", "concrete", "--part-size-mib", "1", "missing.bin", "out.litematic"}},
 		{name: "unknown encoding", args: []string{"encode", "--encoding", "other", "missing.bin", "out.litematic"}},
 		{name: "empty encoding", args: []string{"encode", "--encoding", "", "missing.bin", "out.litematic"}},
 		{name: "no workers", args: []string{"decode", "--workers", "0", "missing.litematic", "out"}},
@@ -38,6 +39,57 @@ func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
 			}
 			if stdout.Len() != 0 {
 				t.Fatalf("error leaked to stdout: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestMultipartSelection(t *testing.T) {
+	t.Parallel()
+	name := "数据.bin"
+	concreteCapacity := int64(32*1024*1024 - 23 - len(name))
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		length   int64
+		explicit bool
+		want     bool
+	}{
+		{name: "concrete capacity", encoding: "concrete", length: concreteCapacity},
+		{name: "concrete automatic", encoding: "concrete", length: concreteCapacity + 1, want: true},
+		{name: "concrete forced empty", encoding: "concrete", explicit: true, want: true},
+		{name: "dense capacity", encoding: "dense", length: codec.MaxDensePayload},
+		{name: "dense automatic", encoding: "dense", length: codec.MaxDensePayload + 1, want: true},
+		{name: "dense forced empty", encoding: "dense", explicit: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := needsMultipart(tc.length, name, tc.encoding, tc.explicit); got != tc.want {
+				t.Fatalf("multipart selection = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMultipartPayloadCap(t *testing.T) {
+	t.Parallel()
+	const mib = 1024 * 1024
+	for _, tc := range []struct {
+		name      string
+		filename  string
+		encoding  string
+		requested int
+		want      int
+	}{
+		{name: "concrete maximum", filename: "data.bin", encoding: "concrete", requested: 32 * mib,
+			want: 32*mib - 23 - len("data.bin") - 64},
+		{name: "concrete UTF8 maximum", filename: "数据.bin", encoding: "concrete", requested: 32 * mib,
+			want: 32*mib - 23 - len("数据.bin") - 64},
+		{name: "concrete below capacity", filename: "data.bin", encoding: "concrete", requested: mib, want: mib},
+		{name: "dense maximum unchanged", filename: "data.bin", encoding: "dense", requested: 32 * mib, want: 32 * mib},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := partPayloadSize(tc.filename, tc.encoding, tc.requested); got != tc.want {
+				t.Fatalf("part payload size = %d, want %d", got, tc.want)
 			}
 		})
 	}

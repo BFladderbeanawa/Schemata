@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	denseVersion       = 3
-	denseBootstrap     = prefixBytes * 2
-	denseChunkBytes    = 256
-	MaxDensePayload    = 32 * 1024 * 1024
-	densePartVersion   = 4
-	denseManifestBytes = 64
-	MaxDenseParts      = 4096
+	denseVersion      = 3
+	denseBootstrap    = prefixBytes * 2
+	denseChunkBytes   = 256
+	MaxDensePayload   = 32 * 1024 * 1024
+	densePartVersion  = 4
+	partManifestBytes = 64
+	MaxDenseParts     = 4096
 )
 
 var concreteNames = [...]string{
@@ -91,17 +91,17 @@ func EncodeDensePartContext(
 	if err := ctx.Err(); err != nil {
 		return volume.Volume{}, fmt.Errorf("encode: %w", err)
 	}
-	if err := validateDensePart(part, uint64(len(payload))); err != nil {
+	if err := validatePart(part, uint64(len(payload))); err != nil {
 		return volume.Volume{}, fmt.Errorf("encode multipart manifest: %w", err)
 	}
-	if err := validateDensePartChecksum(part, payload); err != nil {
+	if err := validatePartChecksum(ctx, part, payload); err != nil {
 		return volume.Volume{}, err
 	}
-	manifest := marshalDensePart(part)
+	manifest := marshalPart(part)
 	return encodeDense(ctx, payload, name, opts, manifest[:], densePartVersion)
 }
 
-func validateDensePart(part PartInfo, payloadLength uint64) error {
+func validatePart(part PartInfo, payloadLength uint64) error {
 	if part.PartSize == 0 || part.PartSize > MaxDensePayload {
 		return fmt.Errorf("part size must be from 1 through 32 MiB")
 	}
@@ -130,21 +130,39 @@ func validateDensePart(part PartInfo, payloadLength uint64) error {
 	return nil
 }
 
-func validateDensePartChecksum(part PartInfo, payload []byte) error {
+func validatePartChecksum(ctx context.Context, part PartInfo, payload []byte) error {
 	if part.Count != 1 {
 		return nil
 	}
-	if crc32.ChecksumIEEE(payload) != part.Checksum {
+	hash := sha256.New()
+	var checksum uint32
+	const chunkBytes = 64 * 1024
+	for offset := 0; offset < len(payload); offset += chunkBytes {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("multipart checksum: %w", err)
+		}
+		chunk := payload[offset:min(len(payload), offset+chunkBytes)]
+		checksum = crc32.Update(checksum, crc32.IEEETable, chunk)
+		if _, err := hash.Write(chunk); err != nil {
+			return fmt.Errorf("multipart SHA256: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("multipart checksum: %w", err)
+	}
+	if checksum != part.Checksum {
 		return fmt.Errorf("full-file checksum mismatch")
 	}
-	if sha256.Sum256(payload) != part.ID {
+	var digest [sha256.Size]byte
+	hash.Sum(digest[:0])
+	if digest != part.ID {
 		return fmt.Errorf("full-file SHA256 mismatch")
 	}
 	return nil
 }
 
-func marshalDensePart(part PartInfo) [denseManifestBytes]byte {
-	var manifest [denseManifestBytes]byte
+func marshalPart(part PartInfo) [partManifestBytes]byte {
+	var manifest [partManifestBytes]byte
 	copy(manifest[:32], part.ID[:])
 	binary.BigEndian.PutUint64(manifest[32:40], part.TotalLength)
 	binary.BigEndian.PutUint64(manifest[40:48], part.Offset)
@@ -155,7 +173,7 @@ func marshalDensePart(part PartInfo) [denseManifestBytes]byte {
 	return manifest
 }
 
-func unmarshalDensePart(manifest []byte) PartInfo {
+func unmarshalPart(manifest []byte) PartInfo {
 	part := PartInfo{
 		TotalLength: binary.BigEndian.Uint64(manifest[32:40]),
 		Offset:      binary.BigEndian.Uint64(manifest[40:48]),
@@ -418,7 +436,7 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	}
 	manifestLength := 0
 	if header[8] == densePartVersion {
-		manifestLength = denseManifestBytes
+		manifestLength = partManifestBytes
 	}
 	length := nameLength + manifestLength + int(payloadLength)
 	g := denseGeometry()
@@ -532,8 +550,8 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	payload := stream[payloadStart:]
 	var part *PartInfo
 	if manifestLength != 0 {
-		decoded := unmarshalDensePart(stream[nameLength:payloadStart])
-		if err := validateDensePart(decoded, payloadLength); err != nil {
+		decoded := unmarshalPart(stream[nameLength:payloadStart])
+		if err := validatePart(decoded, payloadLength); err != nil {
 			return File{}, fmt.Errorf("decode multipart manifest: %w", err)
 		}
 		part = &decoded
@@ -542,7 +560,7 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 		return File{}, fmt.Errorf("payload checksum mismatch")
 	}
 	if part != nil {
-		if err := validateDensePartChecksum(*part, payload); err != nil {
+		if err := validatePartChecksum(ctx, *part, payload); err != nil {
 			return File{}, err
 		}
 	}

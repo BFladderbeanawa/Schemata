@@ -12,11 +12,36 @@ import (
 	"strings"
 
 	"github.com/bfladderbeanawa/schemata/internal/codec"
+	"github.com/bfladderbeanawa/schemata/internal/layout"
 	"github.com/bfladderbeanawa/schemata/internal/output"
 	"github.com/bfladderbeanawa/schemata/internal/schematic"
+	"github.com/bfladderbeanawa/schemata/internal/volume"
 )
 
 const maxParts = 4096
+
+type partsOptions struct {
+	Encoding  string
+	Extension string
+	Layout    layout.Options
+	Banners   bool
+	PartSize  int
+}
+
+func needsMultipart(length int64, name, encoding string, explicit bool) bool {
+	capacity := codec.MaxDensePayload
+	if encoding == "concrete" {
+		capacity = codec.ConcretePayloadCapacity(name, false)
+	}
+	return explicit || length > int64(capacity)
+}
+
+func partPayloadSize(name, encoding string, requested int) int {
+	if encoding == "concrete" {
+		return min(requested, codec.ConcretePayloadCapacity(name, true))
+	}
+	return requested
+}
 
 // copyContext checks cancellation between bounded I/O operations.
 func copyContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
@@ -70,12 +95,16 @@ func encodeParts(
 	ctx context.Context,
 	input string,
 	requested string,
-	partSize int,
-	opts codec.DenseOptions,
+	opts partsOptions,
 ) (path string, err error) {
-	if partSize < 1 || partSize > codec.MaxDensePayload {
+	if opts.PartSize < 1 || opts.PartSize > codec.MaxDensePayload {
 		return "", errors.New("multipart part size outside payload resource limit")
 	}
+	name := filepath.Base(input)
+	if err := output.ValidateName(name); err != nil {
+		return "", err
+	}
+	partSize := partPayloadSize(name, opts.Encoding, opts.PartSize)
 	f, err := os.Open(input)
 	if err != nil {
 		return "", fmt.Errorf("open input: %w", err)
@@ -99,10 +128,6 @@ func encodeParts(
 	count = max(int64(1), count)
 	if count > maxParts {
 		return "", fmt.Errorf("multipart input requires %d parts, limit is %d", count, maxParts)
-	}
-	name := filepath.Base(input)
-	if err := output.ValidateName(name); err != nil {
-		return "", err
 	}
 	hash := sha256.New()
 	crc := crc32.NewIEEE()
@@ -148,13 +173,21 @@ func encodeParts(
 		if _, err = io.MultiWriter(hash, crc).Write(payload); err != nil {
 			return path, err
 		}
-		v, encodeErr := codec.EncodeDensePartContext(ctx, payload, name, opts, part)
+		var v volume.Volume
+		var encodeErr error
+		if opts.Encoding == "concrete" {
+			v, encodeErr = codec.EncodeConcretePartContext(ctx, payload, name, opts.Layout, part)
+		} else {
+			v, encodeErr = codec.EncodeDensePartContext(ctx, payload, name, codec.DenseOptions{
+				Layout: opts.Layout, Banners: opts.Banners,
+			}, part)
+		}
 		if encodeErr != nil {
 			return path, fmt.Errorf("encode part %d: %w", index+1, encodeErr)
 		}
-		filename := fmt.Sprintf("%06d.litematic", index+1)
+		filename := fmt.Sprintf("%06d%s", index+1, opts.Extension)
 		written, writeErr := output.Create(path, filename, func(w io.Writer) error {
-			return schematic.Write(w, ".litematic", v)
+			return schematic.Write(w, opts.Extension, v)
 		})
 		if writeErr != nil {
 			return path, fmt.Errorf("write part %d: %w", index+1, writeErr)
@@ -204,7 +237,8 @@ func decodeParts(
 	for {
 		entries, readErr := dir.ReadDir(128)
 		for _, entry := range entries {
-			if strings.EqualFold(filepath.Ext(entry.Name()), ".litematic") {
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if ext == ".litematic" || ext == ".schematic" {
 				if !entry.Type().IsRegular() {
 					return "", errors.New("multipart entries must be regular files")
 				}
@@ -222,7 +256,7 @@ func decodeParts(
 		}
 	}
 	if len(paths) == 0 {
-		return "", errors.New("multipart directory contains no litematic parts")
+		return "", errors.New("multipart directory contains no supported schematic parts")
 	}
 	temp, err := os.CreateTemp("", "schemata-recovery-*")
 	if err != nil {
@@ -236,7 +270,7 @@ func decodeParts(
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		v, err := readStructure(filePath, ".litematic")
+		v, err := readStructure(filePath, strings.ToLower(filepath.Ext(filePath)))
 		if err != nil {
 			return "", fmt.Errorf("read part %q: %w", filePath, err)
 		}

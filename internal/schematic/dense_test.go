@@ -262,7 +262,7 @@ func TestDenseMalformedBannerRejection(t *testing.T) {
 }
 
 func TestDenseUnknownEncodingVersionReachesCodec(t *testing.T) {
-	for _, version := range []byte{0, 3, 255} {
+	for _, version := range []byte{0, 3, 5, 255} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			want := denseFixture([]volume.State{{Name: "minecraft:air", Properties: map[string]string{}}})
 			want.Blocks[16], want.Blocks[17] = uint32(version>>4), uint32(version&15)

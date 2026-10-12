@@ -71,7 +71,7 @@ func TestDensePartFixedManifestFields(t *testing.T) {
 	for i := range part.ID {
 		part.ID[i] = byte(i)
 	}
-	manifest := marshalDensePart(part)
+	manifest := marshalPart(part)
 	want := make([]byte, 64)
 	for i := range 32 {
 		want[i] = byte(i)
@@ -140,7 +140,7 @@ func TestDensePartRejectsManifestInvariants(t *testing.T) {
 				t.Fatalf("encoder error = %v, want %q", err, tc.want)
 			}
 			// Construct valid symbol framing around an independently malformed manifest.
-			manifest := marshalDensePart(part)
+			manifest := marshalPart(part)
 			v, err := encodeDense(context.Background(), payload, "x", DenseOptions{}, manifest[:], densePartVersion)
 			if err != nil {
 				t.Fatal(err)
@@ -170,7 +170,7 @@ func TestDensePartRejectsCorruption(t *testing.T) {
 			}
 		}, want: "32 MiB"},
 		{name: "padding", alter: func(v *volume.Volume) {
-			manifest := marshalDensePart(singleDensePart(payload))
+			manifest := marshalPart(singleDensePart(payload))
 			_, used, err := planDenseChunks(payload, "x", manifest[:], denseGeometry(), ordinaryFallback(), false)
 			if err != nil {
 				t.Fatal(err)
@@ -217,7 +217,7 @@ func TestDensePartRejectsSinglePartFullHashCorruption(t *testing.T) {
 			if _, err := EncodeDensePart(payload, "x", DenseOptions{}, part); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("encoder error: %v", err)
 			}
-			manifest := marshalDensePart(part)
+			manifest := marshalPart(part)
 			v, err := encodeDense(context.Background(), payload, "x", DenseOptions{}, manifest[:], densePartVersion)
 			if err != nil {
 				t.Fatal(err)
@@ -238,11 +238,11 @@ func TestDensePartMaximumCanonicalCount(t *testing.T) {
 		Count:       MaxDenseParts,
 		PartSize:    MaxDensePayload,
 	}
-	if err := validateDensePart(part, MaxDensePayload); err != nil {
+	if err := validatePart(part, MaxDensePayload); err != nil {
 		t.Fatal(err)
 	}
-	manifest := marshalDensePart(part)
-	if got := unmarshalDensePart(manifest[:]); got != part {
+	manifest := marshalPart(part)
+	if got := unmarshalPart(manifest[:]); got != part {
 		t.Fatalf("maximum fields differ: %+v", got)
 	}
 }
