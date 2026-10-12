@@ -1,3 +1,5 @@
 .agents
 /schemata
 /schemata.exe
+# Local-only documentation: never track or publish.
+/docs/
