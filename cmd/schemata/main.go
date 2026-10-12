@@ -1,4 +1,4 @@
-// Schemata stores files in concrete structures and recovers their exact bytes.
+// Schemata stores files in schematic structures and recovers their exact bytes.
 package main
 
 import (
@@ -70,8 +70,9 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	fs := flag.NewFlagSet("encode", flag.ContinueOnError)
 	fs.SetOutput(help)
 	height := fs.Int("max-height", 64, "height cap: multiple of 16 from 16 through 384 blocks")
-	policy := fs.String("layout", "balanced", "balanced, compact, or bounded")
-	padding := fs.Int("padding-percent", 25, "bounded layout extra units as percent of required units (0–100)")
+	mode := fs.String("encoding", "", "dense (.litematic default) or concrete (.schematic default)")
+	policy := fs.String("layout", "", "compact (dense default), balanced (concrete default), or bounded")
+	padding := fs.Int("padding-percent", 25, "bounded layout extra positions/units as percent of required capacity (0–100)")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata encode [flags] input-file output.litematic|output.schematic")
 		fs.PrintDefaults()
@@ -85,22 +86,51 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if *height == 0 {
 		return "", true, errors.New("max height must be a multiple of 16 from 16 through 384")
 	}
-	if *policy == "" {
+	modeSet, policySet := false, false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "encoding" {
+			modeSet = true
+		}
+		if f.Name == "layout" {
+			policySet = true
+		}
+	})
+	if policySet && *policy == "" {
 		return "", true, errors.New("layout must be balanced, compact, or bounded")
-	}
-	opts := layout.Options{MaxHeight: *height, Policy: *policy, PaddingPercent: *padding}
-	if _, err := layout.Select(1, opts); err != nil {
-		return "", true, err
 	}
 	ext, err := formatExtension(fs.Arg(1))
 	if err != nil {
+		return "", true, err
+	}
+	if !modeSet {
+		*mode = "dense"
+		if ext == ".schematic" {
+			*mode = "concrete"
+		}
+	}
+	if *mode != "dense" && *mode != "concrete" {
+		return "", true, errors.New("encoding must be dense or concrete")
+	}
+	if *mode == "dense" && ext != ".litematic" {
+		return "", true, errors.New("dense encoding requires .litematic output")
+	}
+	opts := layout.Options{MaxHeight: *height, Policy: *policy, PaddingPercent: *padding}
+	selectLayout := layout.Select
+	if *mode == "dense" {
+		selectLayout = layout.SelectDense
+	}
+	if _, err := selectLayout(1, opts); err != nil {
 		return "", true, err
 	}
 	payload, err := readPayload(fs.Arg(0))
 	if err != nil {
 		return "", false, err
 	}
-	v, err := codec.Encode(payload, filepath.Base(fs.Arg(0)), opts)
+	encodeFile := codec.Encode
+	if *mode == "dense" {
+		encodeFile = codec.EncodeDense
+	}
+	v, err := encodeFile(payload, filepath.Base(fs.Arg(0)), opts)
 	if err != nil {
 		return "", false, err
 	}
@@ -117,7 +147,7 @@ func decode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	fs := flag.NewFlagSet("decode", flag.ContinueOnError)
 	fs.SetOutput(help)
 	name := fs.String("filename", "", "replacement output basename (never a path)")
-	workers := fs.Int("workers", min(runtime.GOMAXPROCS(0), 256), "concurrent unit decoding workers (1–256)")
+	workers := fs.Int("workers", min(runtime.GOMAXPROCS(0), 256), "concurrent chunk/unit decoding workers (1–256)")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata decode [flags] input.litematic|input.schematic destination-directory")
 		fs.PrintDefaults()

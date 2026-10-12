@@ -1,6 +1,6 @@
 # Schemata
 
-Stores arbitrary file bytes and their UTF-8 basename in a solid concrete-block structure. Explicit `encode` and `decode` operations; a schematic can itself be the payload.
+Stores arbitrary file bytes and their UTF-8 basename in Minecraft schematic structures. Explicit `encode` and `decode` operations; a schematic can itself be the payload.
 
 ## Build and use
 
@@ -9,7 +9,7 @@ Windows PowerShell:
 
 ```powershell
 go build -o schemata.exe ./cmd/schemata
-.\schemata.exe encode --max-height 64 --layout balanced report.pdf archive.litematic
+.\schemata.exe encode report.pdf archive.litematic
 .\schemata.exe decode --workers 4 archive.litematic recovered
 ```
 
@@ -20,7 +20,8 @@ Linux/macOS:
 
 ```sh
 go build -o schemata ./cmd/schemata
-./schemata encode --max-height 64 --layout balanced report.pdf archive.litematic
+./schemata encode report.pdf archive.litematic
+./schemata encode --encoding concrete --layout balanced report.pdf concrete.litematic
 ./schemata encode --layout bounded --padding-percent 25 report.pdf archive.schematic
 ./schemata decode --workers 4 archive.litematic recovered
 ./schemata decode --filename replacement.pdf archive.schematic recovered
@@ -28,13 +29,28 @@ go build -o schemata ./cmd/schemata
 
 Flags precede positional arguments. Decode creates the destination directory when absent. Both commands print the actual output path and never overwrite: collisions use `report (1).pdf`, `report (2).pdf`, etc. Diagnostics go to stderr; exit codes are 0 (success), 1 (runtime failure), and 2 (usage error).
 
+## Encoding modes
+
+| Mode | Output formats | Default layout | Recovery guarantee |
+|---|---|---|---|
+| `dense` (version 2) | `.litematic` | `compact` | Byte-exact through Schemata's own writer/reader only |
+| `concrete` (version 1) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
+
+With no `--encoding`, `.litematic` selects dense and `.schematic` selects concrete. Explicit `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding concrete` retains concrete `.litematic` output. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
+
+Dense uses all **24,135 registered vanilla Java 1.20.1 complete block states**, including directional/transient states and three distinct air types, plus native banner base colors, properties, and ordered zero-through-six-layer pattern/color lists. All **41 native pattern hashes** accepted by the pinned game parser are included, including explicit base pattern `b`; repeated or obscured layers are data. The combinatorial alphabet has **25,540,862,200,767,107,655 symbols**, ranked without materializing combinations. [Catalog provenance and reproducible independent validation](internal/alphabet/PROVENANCE.md).
+
+Dense version 2 has one fixed 46-position concrete bootstrap followed by independently decodable 256-byte base-N chunks. Header lengths preserve empty payloads and leading/trailing zeros; CRC-32/IEEE covers only payload bytes. Arbitrary positive dimensions include every air position. Padding is canonical rank zero (`acacia_button` with pinned properties), not white concrete or an end marker. [Frozen wire specification and conversion measurements](docs/dense-wire.md).
+
+**Dense is schematic-only.** No recovery guarantee after placement, ticking, chunk reload, world export, or external-tool re-saving. Unsupported or unstable world states remain eligible symbols. Larger palettes and banner NBT may increase compressed file size; the objective is more bytes per block position, not smaller files. Only native banner patterns carry additional data; arbitrary inventories, text, or custom NBT do not.
+
 ## Pinned formats
 
-- Litematica `.litematic`: gzip-compressed big-endian NBT, **Version 6, SubVersion 1** (also read Version 6 with absent/zero SubVersion). Write MinecraftDataVersion **3465 (Java 1.20.1)**. Exactly one region. Block state packing is continuous, least-significant bits first, with `max(2, ceil(log2(palette size)))` bits per entry, including entries crossing 64-bit words. Native order is x-fastest, then z, then y. Palette indices are not nibble values. Air may be an unused palette entry but never a selected block. Signed region dimensions describe a selection extending negatively from its origin, not a mirrored block array; normalize the minimum corner without changing block order.
+- Litematica `.litematic`: gzip-compressed big-endian NBT, **Version 6, SubVersion 1** (also read Version 6 with absent/zero SubVersion). Write MinecraftDataVersion **3465 (Java 1.20.1)**. Exactly one region. Block state packing is continuous, least-significant bits first, with `max(2, ceil(log2(palette size)))` bits per entry, including entries crossing 64-bit words. Native order is x-fastest, then z, then y. Palette indices are not encoding symbols. Concrete rejects selected air; dense includes every air position and preserves all three air types. Signed region dimensions describe a selection extending negatively from its origin, not a mirrored block array; normalize the minimum corner without changing block order. Banner tile coordinates remain minimum-corner-local, independently of translated Position or signed Size.
 - Legacy MCEdit `.schematic`: gzip-compressed big-endian NBT rooted at `Schematic`, **Materials="Alpha"**, signed-short Width/Height/Length, numeric concrete block ID **251**, metadata **0–15**. This format has no numbered version field; reject other Materials variants and explicit Version tags. Native index `(y*Length+z)*Width+x`. Optional AddBlocks must have the expected length and all high-ID bits zero for concrete. No Sponge `.schem`, Classic, or Pocket variants.
 - Format references: [Litematica 1.20.1 source](https://github.com/maruohon/litematica/tree/afb3feb258aacdc52901217bec233e2bee880b21), [Litemapy format documentation](https://litemapy.readthedocs.io/en/latest/litematics.html), [legacy schematic specification](https://minecraft.wiki/w/Schematic_file_format), [WorldEdit legacy reader](https://github.com/EngineHub/WorldEdit/blob/master/worldedit-core/src/main/java/com/sk89q/worldedit/extent/clipboard/io/MCEditSchematicReader.java).
 
-## Block stream version 1
+## Concrete block stream version 1
 
 All numeric header fields are unsigned, **big-endian**. One header begins at logical byte zero:
 
@@ -56,21 +72,23 @@ A unit is 16×16×16 blocks (2048 bytes). Traverse complete units in y/x/z order
 
 ## Layout contract
 
-`requiredUnits=ceil((23+filenameBytes+payloadBytes)/2048)`. Dimensions are positive multiples of 16. `--max-height` defaults to 64 and accepts multiples of 16 from 16 through 384; it is a cap.
+Concrete: `requiredUnits=ceil((23+filenameBytes+payloadBytes)/2048)`. Dimensions are positive multiples of 16. `--max-height` defaults to 64 and accepts multiples of 16 from 16 through 384; it is a cap.
 
-- `balanced` (default): choose the smallest integer cube side `s` with `s*s*min(s,heightCapUnits) >= requiredUnits`; use `(s,min(s,heightCapUnits),s)`. This prioritizes similar axes and permits rectangular padding.
+- `balanced` (concrete default): choose the smallest integer cube side `s` with `s*s*min(s,heightCapUnits) >= requiredUnits`; use `(s,min(s,heightCapUnits),s)`. This prioritizes similar axes and permits rectangular padding.
 - `compact`: minimize total units among all feasible rectangles, then minimize the balance metric below.
 - `bounded`: `--padding-percent` is an integer from 0 through 100, default **25**. Permit at most `requiredUnits + floor(requiredUnits*paddingPercent/100)` units. Minimize the balance metric, then volume.
 
 For compact/bounded, enumerate x≤z (symmetric horizontal choices), y within the height cap. Balance is first `max(x,y,z)-min(x,y,z)`, then `(x-y)^2+(y-z)^2+(z-x)^2`. Remaining ties prefer larger y, then smaller x, then smaller z. Selection is deterministic and independent of worker scheduling.
 
+Dense uses the same balance metric and deterministic ties in **block positions**, with arbitrary positive dimensions under the same height cap. `compact` is the dense default and minimizes total positions before balance. `balanced` chooses the smallest sufficient block-based cube with capped y. `bounded` permits at most `requiredPositions + floor(requiredPositions*paddingPercent/100)` positions. Required capacity includes the bootstrap, filename, payload, and fixed chunk rounding. Long thin compact layouts are valid. [Dense layout contract](docs/dense-layout.md).
+
 ## Recovery and safety
 
-Select exactly the rectangular volume, without surrounding air. Translation is supported, including signed Litematica region sizes; rotation and mirroring are unsupported. Preserve orientation when placing and re-exporting. A height H fits the modern world at bottom y satisfying `-64 ≤ y ≤ 320-H`; legacy file storage does not imply legacy world-height restrictions.
+Select exactly the rectangular volume, without surrounding air. Translation is supported, including signed Litematica region sizes; rotation and mirroring are unsupported. Concrete retains placement-oriented requirements; dense makes no placement-recovery guarantee. Never trim or skip dense outer air. A height H fits the modern world at bottom y satisfying `-64 ≤ y ≤ 320-H`; this geometry is not a dense recovery guarantee, and legacy file storage does not imply legacy world-height restrictions.
 
-Decode uses bounded workers (1–256), assembling independent units by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
+Decode uses bounded workers (1–256), assembling independent concrete units or dense chunks by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected, including stored traversal names when a replacement is requested. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
 
-Resource limits are checked before allocation: at most **64 Mi blocks** (32 MiB stream capacity), **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Inputs above these limits fail explicitly. Adapters do not inspect payload content or infer the operation from an extension.
+Independent resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense banner entities can exhaust the NBT budget well before the payload ceiling. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
 
 ## Verification
 
@@ -80,19 +98,22 @@ go test -tags=integration ./...
 go test -race -tags=integration ./...
 ```
 
-Verified on Windows with Go 1.24.1:
+Verified for the dense expansion on Windows with Go 1.24.1:
 
-- Unit, integration, and race-enabled integration suites passed.
-- Built CLI: both formats × all three layouts, single/four-worker byte-exact recovery, empty files, trailing zeros, UTF-8 basenames, a schematic as opaque payload, encode/decode collisions, signed translated selections, and corruption rejection without output.
-- **Litemapy 0.11.0b0** imported a generated `.litematic`; every concrete block reconstructed the original payload and CRC32. A translated region re-exported by Litemapy decoded byte-exactly.
-- **WorldEdit 7.2.20** `MCEditSchematicReader` and `LegacyMapper` imported a generated legacy `.schematic` and reconstructed all 10,243 test payload bytes exactly. A headless platform supplied WorldEdit's bundled registries; no block decoding was mocked.
-- Independently generated Litemapy/nbtlib fixtures decode byte-exactly. Fixture provenance and hashes are in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md).
+- Integration and race-enabled integration suites passed, including all ordinary catalog states through serialization, banner ordering/boundaries, distinct air states, arbitrary dense dimensions, layout/resource constraints, indexed worker recovery, malformed data, and existing concrete fixtures.
+- Actual built CLI: dense `.litematic`, concrete `.litematic`, and concrete `.schematic` × all three layouts × one/four workers recovered a 4,356-byte UTF-8-named payload byte-exactly, including trailing zeros. Also exercised empty dense files, schematic-as-payload, defaults, explicit dense legacy rejection, and encode/decode collisions.
+- Controlled dense CLI fixtures recovered byte-exactly after palette/key reordering, compression changes, nonpayload metadata changes, translation, and signed sizes. CRC corruption and a missing banner entity failed without creating a destination.
+- Actual CLI rejected unknown dense version 3 and a 256 KiB input exceeding the banner NBT node budget without publishing output. The 32 MiB payload ceiling is not a promise that banner-heavy encodings fit independent NBT limits.
+- Catalog acquisition independently matched official generated reports against the live Mojang registry; native banner parsing exercised all 41 hashes × 16 colors × lengths 0–6. See [catalog provenance](internal/alphabet/PROVENANCE.md).
 
-**Not verified:** in-game Litematica import, world placement, and placement-to-re-export through the targeted mods. The available installation has no configured test world/mod environment. External library re-export is not a substitute for that check. Own round trips alone do not prove compatibility.
+Historical **concrete-only** external verification (not rerun for this expansion): Litemapy 0.11.0b0 import/translated re-export and WorldEdit 7.2.20 legacy import. Independently generated concrete fixtures and exact provenance remain in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md). These results do not establish dense interoperability.
+
+**Not verified or guaranteed for dense:** external-tool re-save, in-game import, world placement, ticking/reload, or world-to-schematic recovery. Own writer/reader round trips prove internal recovery only. Concrete in-game placement-to-re-export also remains unverified.
 
 ## Changes
 
 - Added the dependency-free encode/decode CLI, encoding version 1, deterministic layouts, indexed concurrent recovery, pinned schematic adapters, and no-overwrite output handling.
+- Added dense encoding version 2 with the complete pinned Java 1.20.1 alphabet, compact banner ranking, fixed bounded chunks, banner-aware Litematica serialization, arbitrary dense dimensions, mode-specific defaults, and automatic encoding dispatch. Preserved concrete version 1 in both formats.
 
 ## License
 

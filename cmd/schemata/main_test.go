@@ -18,18 +18,26 @@ import (
 
 func TestCLIByteExactRecovery(t *testing.T) {
 	t.Parallel()
-	for _, ext := range []string{".litematic", ".schematic"} {
-		t.Run(ext, func(t *testing.T) {
+	for _, tc := range []struct{ name, ext, mode string }{
+		{name: "dense default", ext: ".litematic"},
+		{name: "concrete litematic", ext: ".litematic", mode: "concrete"},
+		{name: "concrete legacy default", ext: ".schematic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			payload := append(bytes.Repeat([]byte{0, 255, 174, 39}, 2100), 0, 0, 0)
 			input := filepath.Join(dir, "data.schematic")
 			if err := os.WriteFile(input, payload, 0600); err != nil {
 				t.Fatal(err)
 			}
-			structure := filepath.Join(dir, "archive"+ext)
-			execute(t, []string{"encode", "--max-height", "16", "--layout", "compact", input, structure}, 0)
+			structure := filepath.Join(dir, "archive"+tc.ext)
+			encodeArgs := []string{"encode", "--max-height", "16", "--layout", "compact"}
+			if tc.mode != "" {
+				encodeArgs = append(encodeArgs, "--encoding", tc.mode)
+			}
+			execute(t, append(encodeArgs, input, structure), 0)
 			execute(t, []string{"encode", input, structure}, 0)
-			if _, err := os.Stat(filepath.Join(dir, "archive (1)"+ext)); err != nil {
+			if _, err := os.Stat(filepath.Join(dir, "archive (1)"+tc.ext)); err != nil {
 				t.Fatal(err)
 			}
 			dest := filepath.Join(dir, "recovered")

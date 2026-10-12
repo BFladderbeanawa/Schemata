@@ -1,4 +1,4 @@
-// Package codec maps file bytes to concrete colors in complete unit order.
+// Package codec maps file bytes to versioned in-structure encoding symbols.
 package codec
 
 import (
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/bfladderbeanawa/schemata/internal/layout"
@@ -86,6 +87,9 @@ func Decode(ctx context.Context, v volume.Volume, workers int) (File, error) {
 	if err := ctx.Err(); err != nil {
 		return File{}, fmt.Errorf("decode: %w", err)
 	}
+	if v.Blocks != nil {
+		return decodeDense(ctx, v, workers)
+	}
 	blocks, err := volume.Count(v.X, v.Y, v.Z)
 	if err != nil {
 		return File{}, fmt.Errorf("decode dimensions: %w", err)
@@ -97,18 +101,28 @@ func Decode(ctx context.Context, v volume.Volume, workers int) (File, error) {
 	workers = min(workers, units)
 	stream := make([]byte, blocks/2)
 	failures := make([]unitFailure, workers)
+	var firstFailedUnit atomic.Int64
+	firstFailedUnit.Store(int64(units))
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for worker := range workers {
 		go func(worker int) {
 			defer wg.Done()
 			for unit := worker; unit < units; unit += workers {
+				if int64(unit) > firstFailedUnit.Load() {
+					return
+				}
 				if ctx.Err() != nil {
 					return
 				}
 				failure := decodeUnit(ctx, v, unit, stream[unit*unitBytes:(unit+1)*unitBytes])
 				if failure.err != nil {
 					failures[worker] = failure
+					for previous := firstFailedUnit.Load(); int64(unit) < previous; previous = firstFailedUnit.Load() {
+						if firstFailedUnit.CompareAndSwap(previous, int64(unit)) {
+							break
+						}
+					}
 					return
 				}
 			}

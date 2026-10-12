@@ -175,6 +175,96 @@ func parseNBT(data []byte) (string, tag, error) {
 	return name, t, err
 }
 
+// validateNBTOutput applies the parser's independent limits before gzip writes
+// anything. Array elements count as bytes, not individual NBT nodes.
+func validateNBTOutput(name string, root tag) error {
+	b := nbtBudget{}
+	if root.kind != 10 {
+		return fmt.Errorf("NBT root must be a compound")
+	}
+	return b.named(name, root, 1)
+}
+
+type nbtBudget struct {
+	bytes int
+	nodes int
+}
+
+func (b *nbtBudget) add(n int) error {
+	if n < 0 || n > maxNBT-b.bytes {
+		return fmt.Errorf("serialized NBT exceeds 256 MiB limit")
+	}
+	b.bytes += n
+	return nil
+}
+
+func (b *nbtBudget) string(s string) error {
+	if len(s) > 65535 {
+		return fmt.Errorf("NBT string too long")
+	}
+	return b.add(2 + len(s))
+}
+
+func (b *nbtBudget) named(name string, t tag, depth int) error {
+	if err := b.add(1); err != nil {
+		return err
+	}
+	if err := b.string(name); err != nil {
+		return err
+	}
+	return b.payload(t, depth)
+}
+
+func (b *nbtBudget) payload(t tag, depth int) error {
+	b.nodes++
+	if depth > 64 || b.nodes > maxNodes {
+		return fmt.Errorf("NBT nesting or node limit exceeded")
+	}
+	switch t.kind {
+	case 1, 2, 3, 4, 5, 6:
+		return b.add([...]int{0, 1, 2, 4, 8, 4, 8}[t.kind])
+	case 8:
+		return b.string(t.text)
+	case 7, 11, 12:
+		width := 1
+		if t.kind == 11 {
+			width = 4
+		}
+		if t.kind == 12 {
+			width = 8
+		}
+		if len(t.raw)%width != 0 || len(t.raw)/width > 2147483647 {
+			return fmt.Errorf("invalid NBT output array length")
+		}
+		return b.add(4 + len(t.raw))
+	case 9:
+		if t.element > 12 || (t.element == 0 && len(t.list) != 0) || len(t.list) > maxNodes-b.nodes {
+			return fmt.Errorf("invalid NBT output list")
+		}
+		if err := b.add(5); err != nil {
+			return err
+		}
+		for _, child := range t.list {
+			if child.kind != t.element {
+				return fmt.Errorf("inconsistent NBT output list element")
+			}
+			if err := b.payload(child, depth+1); err != nil {
+				return err
+			}
+		}
+	case 10:
+		for key, child := range t.compound {
+			if err := b.named(key, child, depth+1); err != nil {
+				return err
+			}
+		}
+		return b.add(1)
+	default:
+		return fmt.Errorf("invalid NBT output type")
+	}
+	return nil
+}
+
 type nbtWriter struct {
 	w   io.Writer
 	err error

@@ -26,7 +26,7 @@ func extension(ext string) (string, error) {
 	return ext, nil
 }
 
-// Read decodes a bounded gzip NBT concrete selection, preserving native coordinates.
+// Read decodes a bounded gzip NBT selection, preserving native coordinates.
 func Read(r io.Reader, ext string) (volume.Volume, error) {
 	ext, err := extension(ext)
 	if err != nil {
@@ -66,15 +66,23 @@ func Write(w io.Writer, ext string, v volume.Volume) error {
 	if err := v.Validate(); err != nil {
 		return err
 	}
+	if v.Blocks != nil && ext != ".litematic" {
+		return fmt.Errorf("dense encoding requires .litematic output")
+	}
 	var name string
 	var root tag
 	if ext == ".schematic" {
 		name = "Schematic"
 		root, err = legacyRoot(v)
+	} else if v.Blocks != nil {
+		root, err = denseLitematicRoot(v)
 	} else {
 		root = litematicRoot(v)
 	}
 	if err != nil {
+		return err
+	}
+	if err := validateNBTOutput(name, root); err != nil {
 		return err
 	}
 	gz := gzip.NewWriter(w)
@@ -150,7 +158,7 @@ func readLitematic(root tag) (volume.Volume, error) {
 			size[i] = int(-int64(n))
 		}
 	}
-	n, err := volume.Count(size[0], size[1], size[2])
+	n, err := volume.CountDense(size[0], size[1], size[2])
 	if err != nil {
 		return volume.Volume{}, err
 	}
@@ -189,6 +197,15 @@ func readLitematic(root tag) (volume.Volume, error) {
 	words := (n*width + 63) / 64
 	if len(states.raw) != words*8 {
 		return volume.Volume{}, fmt.Errorf("invalid packed block state length")
+	}
+	// Identification uses actual concrete names, never palette indices. Dense
+	// versions use native traversal; version 1 keeps the historical unit path.
+	if !unitConcreteV1Bootstrap(palette.list, states.raw, size, width) &&
+		nativeDenseBootstrap(palette.list, states.raw, n, width) {
+		return readDenseLitematic(region, size, palette.list, states.raw)
+	}
+	if _, err := volume.Count(size[0], size[1], size[2]); err != nil {
+		return volume.Volume{}, err
 	}
 	v := volume.Volume{X: size[0], Y: size[1], Z: size[2], Colors: make([]byte, n)}
 	mask := uint64(1)<<width - 1
