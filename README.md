@@ -5,13 +5,25 @@ Stores arbitrary file bytes and their UTF-8 basename in a solid concrete-block s
 ## Build and use
 
 Requires Go 1.24 or newer. No runtime Go dependencies.
+Windows PowerShell:
+
+```powershell
+go build -o schemata.exe ./cmd/schemata
+.\schemata.exe encode --max-height 64 --layout balanced report.pdf archive.litematic
+.\schemata.exe decode --workers 4 archive.litematic recovered
+```
+
+PowerShell requires `.\` for executables in the current directory unless their directory is on PATH. Build with the `.exe` suffix on Windows. The supported Litematica extension is `.litematic`, not `.litematica`.
+
+Linux/macOS:
+
 
 ```sh
 go build -o schemata ./cmd/schemata
-schemata encode --max-height 64 --layout balanced report.pdf archive.litematic
-schemata encode --layout bounded --padding-percent 25 report.pdf archive.schematic
-schemata decode --workers 4 archive.litematic recovered
-schemata decode --filename replacement.pdf archive.schematic recovered
+./schemata encode --max-height 64 --layout balanced report.pdf archive.litematic
+./schemata encode --layout bounded --padding-percent 25 report.pdf archive.schematic
+./schemata decode --workers 4 archive.litematic recovered
+./schemata decode --filename replacement.pdf archive.schematic recovered
 ```
 
 Flags precede positional arguments. Decode creates the destination directory when absent. Both commands print the actual output path and never overwrite: collisions use `report (1).pdf`, `report (2).pdf`, etc. Diagnostics go to stderr; exit codes are 0 (success), 1 (runtime failure), and 2 (usage error).
