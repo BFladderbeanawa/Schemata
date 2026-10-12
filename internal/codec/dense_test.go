@@ -40,7 +40,7 @@ func TestDenseByteExactBoundaries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if file.Name != "é.bin" || !bytes.Equal(file.Payload, payload) {
+				if file.Name != "é.bin" || !bytes.Equal(file.Payload, payload) || file.Part != nil {
 					t.Fatalf("workers %d: recovery differs", workers)
 				}
 			}
@@ -94,7 +94,7 @@ func TestDenseRejectsCorruptionAndImpossibleLengths(t *testing.T) {
 		alter func(*volume.Volume)
 		want  string
 	}{
-		{name: "unknown version", alter: func(v *volume.Volume) { denseSetHeaderByte(t, v, 8, 4) }, want: "unsupported encoding version"},
+		{name: "unknown version", alter: func(v *volume.Volume) { denseSetHeaderByte(t, v, 8, 5) }, want: "unsupported encoding version"},
 		{name: "payload over limit", alter: func(v *volume.Volume) {
 			var b [8]byte
 			binary.BigEndian.PutUint64(b[:], MaxDensePayload+1)
@@ -127,7 +127,14 @@ func TestDensePaddingAndUnsafeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, used, err := planDenseChunks([]byte{0, 0}, "x.bin", denseGeometry(), ordinaryFallback(), false)
+	_, used, err := planDenseChunks(
+		[]byte{0, 0},
+		"x.bin",
+		nil,
+		denseGeometry(),
+		ordinaryFallback(),
+		false,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

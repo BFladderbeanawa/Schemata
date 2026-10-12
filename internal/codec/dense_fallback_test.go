@@ -119,7 +119,7 @@ func TestDenseVersion2StillRecovers(t *testing.T) {
 	}
 	for _, workers := range []int{1, 4} {
 		file, err := Decode(context.Background(), parsed, workers)
-		if err != nil || file.Name != name || !bytes.Equal(file.Payload, payload) {
+		if err != nil || file.Name != name || !bytes.Equal(file.Payload, payload) || file.Part != nil {
 			t.Fatalf("version2 workers%d: %v", workers, err)
 		}
 	}
@@ -140,5 +140,69 @@ func TestDenseFallbackDeterministicAcrossScheduling(t *testing.T) {
 	}
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("fallback structure depends on scheduling")
+	}
+}
+
+func TestDensePartSchematicRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		banners bool
+		part    *PartInfo
+	}{
+		{name: "empty", payload: []byte{}},
+		{name: "zero boundaries", payload: bytes.Repeat([]byte{0, 0, 255, 173, 0}, 137)},
+		{name: "multipart final", payload: []byte{173, 0}, part: &PartInfo{TotalLength: 5, Offset: 3, Index: 1, Count: 2, PartSize: 3}},
+		{name: "banner fallback", payload: bytes.Repeat([]byte{255, 17, 0, 173, 91}, 20000), banners: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			part := singleDensePart(tc.payload)
+			if tc.part != nil {
+				part = *tc.part
+			}
+			v, err := EncodeDensePart(tc.payload, "original.zip", DenseOptions{Banners: tc.banners}, part)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.banners {
+				rankAt := func(position int) *big.Int {
+					rank, err := alphabet.Rank(v.Palette[v.Blocks[position]], v.Banners[position])
+					if err != nil {
+						t.Fatal(err)
+					}
+					return rank
+				}
+				plan, _, err := scanDenseChunks(
+					len("original.zip")+denseManifestBytes+len(tc.payload),
+					len(v.Blocks),
+					densePartVersion,
+					rankAt,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(v.Banners) == 0 || !plan[len(plan)-1].fallback {
+					t.Fatal("multipart fixture did not exercise full-to-fallback transition")
+				}
+			}
+			var encoded bytes.Buffer
+			if err := schematic.Write(&encoded, ".litematic", v); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := schematic.Read(bytes.NewReader(encoded.Bytes()), ".litematic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, workers := range []int{1, 4} {
+				file, err := Decode(context.Background(), parsed, workers)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if file.Name != "original.zip" || !bytes.Equal(file.Payload, tc.payload) || file.Part == nil || *file.Part != part {
+					t.Fatalf("workers %d: serializer round-trip differs", workers)
+				}
+			}
+		})
 	}
 }

@@ -31,7 +31,7 @@ func TestEncodeGoldenEmptyHeader(t *testing.T) {
 	}
 	assertColors(t, got, want)
 	file, err := codec.Decode(context.Background(), got, 256)
-	if err != nil || file.Name != "x" || len(file.Payload) != 0 {
+	if err != nil || file.Name != "x" || len(file.Payload) != 0 || file.Part != nil {
 		t.Fatalf("empty decode = %+v, %v", file, err)
 	}
 }
@@ -88,7 +88,7 @@ func TestEncodeByteExactAndBoundaries(t *testing.T) {
 						if err != nil {
 							t.Fatalf("workers %d: %v", workers, err)
 						}
-						if file.Name != tt.filename || !bytes.Equal(file.Payload, tt.payload) {
+						if file.Name != tt.filename || !bytes.Equal(file.Payload, tt.payload) || file.Part != nil {
 							t.Fatalf("workers %d: filename/payload differ", workers)
 						}
 					}

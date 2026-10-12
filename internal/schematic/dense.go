@@ -129,11 +129,13 @@ func readDenseLitematic(region tag, size [3]int, palette []tag, raw []byte) (vol
 		Palette: make([]volume.State, len(palette)), Blocks: make([]uint32, n),
 		Banners: map[int][]volume.Layer{},
 	}
+	bannerStates := make([]bool, len(palette))
 	for i, entry := range palette {
 		v.Palette[i], err = readDenseState(entry)
 		if err != nil {
 			return volume.Volume{}, err
 		}
+		bannerStates[i] = alphabet.IsBanner(v.Palette[i])
 	}
 	width := max(2, bits.Len(uint(len(palette)-1)))
 	bannerCount := 0
@@ -143,7 +145,7 @@ func readDenseLitematic(region tag, size [3]int, palette []tag, raw []byte) (vol
 			return volume.Volume{}, fmt.Errorf("palette index out of bounds at block %d", i)
 		}
 		v.Blocks[i] = uint32(index)
-		if alphabet.IsBanner(v.Palette[index]) {
+		if bannerStates[index] {
 			bannerCount++
 		}
 	}
@@ -234,7 +236,9 @@ func readDenseBanner(tile tag, v volume.Volume) (int, []volume.Layer, error) {
 func denseLitematicRoot(v volume.Volume) (tag, error) {
 	// Bound tag-tree allocation itself, before constructing per-banner maps.
 	nodes := 33
-	for _, state := range v.Palette {
+	bannerStates := make([]bool, len(v.Palette))
+	airStates := make([]bool, len(v.Palette))
+	for i, state := range v.Palette {
 		nodes += 3 + len(state.Properties)
 		if nodes > maxNodes {
 			return tag{}, fmt.Errorf("dense palette exceeds NBT node limit")
@@ -242,9 +246,11 @@ func denseLitematicRoot(v volume.Volume) (tag, error) {
 		if _, err := alphabet.Rank(state, nil); err != nil {
 			return tag{}, fmt.Errorf("invalid dense palette state: %w", err)
 		}
+		bannerStates[i] = alphabet.IsBanner(state)
+		airStates[i] = state.Name == "minecraft:air" || state.Name == "minecraft:cave_air" || state.Name == "minecraft:void_air"
 	}
 	for _, index := range v.Blocks {
-		if alphabet.IsBanner(v.Palette[index]) {
+		if bannerStates[index] {
 			nodes += 6
 		}
 		if nodes > maxNodes {
@@ -286,11 +292,10 @@ func denseLitematicRoot(v volume.Volume) (tag, error) {
 			x = binary.BigEndian.Uint64(packed[(word+1)*8:]) | value>>(64-shift)
 			binary.BigEndian.PutUint64(packed[(word+1)*8:], x)
 		}
-		state := v.Palette[index]
-		if state.Name != "minecraft:air" && state.Name != "minecraft:cave_air" && state.Name != "minecraft:void_air" {
+		if !airStates[index] {
 			nonAir++
 		}
-		if !alphabet.IsBanner(state) {
+		if !bannerStates[index] {
 			continue
 		}
 		layers := v.Banners[i]

@@ -24,10 +24,22 @@ const (
 	version     = 1
 )
 
+// PartInfo identifies a canonical slice of a multipart file.
+type PartInfo struct {
+	ID          [32]byte
+	TotalLength uint64
+	Offset      uint64
+	Index       uint32
+	Count       uint32
+	Checksum    uint32
+	PartSize    uint32
+}
+
 // File is a recovered UTF-8 basename and its exact original bytes.
 type File struct {
 	Name    string
 	Payload []byte
+	Part    *PartInfo
 }
 
 // Encode validates the filename and capacity before allocating colors.

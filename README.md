@@ -30,11 +30,27 @@ go build -o schemata ./cmd/schemata
 
 Flags precede positional arguments. Decode creates the destination directory when absent. Both commands print the actual output path and never overwrite: collisions use `report (1).pdf`, `report (2).pdf`, etc. Diagnostics go to stderr; exit codes are 0 (success), 1 (runtime failure), and 2 (usage error).
 
+### Large files: streaming multipart
+
+Dense inputs above 32 MiB automatically use multipart output, with 16 MiB payload per volume. Each volume is one balanced rectangular region; no flags are needed for the large-file path. For requested `1.litematic`, output is a collision-free `1.parts` directory containing numbered `.litematic` files. The command prints that directory, not a nonexistent single file. Existing directories receive numeric suffixes.
+
+```powershell
+.\schemata.exe encode large.zip 1.litematic
+.\schemata.exe decode --workers 4 1.parts recovered
+# Force multipart or choose part size (1–32 MiB):
+.\schemata.exe encode --part-size-mib 8 large.zip archive.litematic
+```
+
+Decode also accepts any part file when all its siblings are together. Parts may be renamed or reordered; their identity and order are stored inside the structures. Mixed sets, duplicate/missing parts, bad per-part CRC/padding, and aggregate SHA-256/CRC failures prevent publication of a recovered file. `--filename` and numeric collision suffixes apply as usual. Multipart is dense-only; concrete retains its single-volume capacity limit.
+
+Encoding hashes the source in a streaming prepass, then reads/encodes/writes one part at a time and checks for source changes. Decode validates parts one at a time into a temporary disk file, verifies the whole file, then publishes through exclusive no-overwrite creation. RAM is bounded by a single part's structures and worker buffers, not total original length; temporary disk must hold the full recovered file. At most 4096 volumes (up to 128 GiB at 32 MiB per part, subject to each volume's independent limits). Keep parts in a dedicated directory. [Version 4 wire specification](docs/dense-v4.md).
+
+
 ## Encoding modes
 
 | Mode | Output formats | Default layout | Recovery guarantee |
 |---|---|---|---|
-| `dense` (writes version 3; reads 2 and 3) | `.litematic` | `balanced` | Byte-exact through Schemata's own writer/reader only |
+| `dense` (writes version 3 single-volume / 4 multipart; reads 2–4) | `.litematic` | `balanced` | Byte-exact through Schemata's own writer/reader only |
 | `concrete` (version 1) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
 
 With no `--encoding`, `.litematic` selects dense and `.schematic` selects concrete. Explicit `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding concrete` retains concrete `.litematic` output. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
@@ -89,7 +105,7 @@ Select exactly the rectangular volume, without surrounding air. Translation is s
 
 Decode uses bounded workers (1–256), assembling independent concrete units or dense chunks by index. Validate the entire structure, header, length, checksum, and padding before writing. Names are untrusted basenames; separators, absolute paths, `.` and `..` are always rejected, including stored traversal names when a replacement is requested. Filesystem-incompatible stored names require a valid `--filename` replacement. Output publication uses an exclusively created destination; failed writes are removed, and concurrent name collisions select another suffix.
 
-Independent resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense version 3 defaults to nonbanner chunks; with `--banners`, it reserves palette/scaffolding nodes and bounds banner use, converting remaining chunks with ordinary nonbanner states. Lower-density nonbanner chunks use more positions; the payload ceiling still does not guarantee every layout fits independent limits. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
+Independent per-volume resource limits: dense **32 MiB payload** excluding header/padding; concrete **32 MiB stream capacity** including header/padding; **64 Mi positions**, **256 MiB uncompressed NBT**, nesting depth 64, and **262,144 NBT nodes**. Dense multipart retains these limits for every part and bounds the set to 4096 parts. Dense defaults to nonbanner chunks; with `--banners`, it reserves palette/scaffolding nodes and bounds banner use, converting remaining chunks with ordinary nonbanner states. Lower-density nonbanner chunks use more positions; the payload ceiling still does not guarantee every layout fits independent limits. Lengths, dimensions, ranks, layer counts, and NBT budgets are checked before relevant allocations/publication. Adapters do not inspect payload content or infer the operation from an extension.
 
 ## Verification
 
@@ -107,6 +123,7 @@ Verified for the dense expansion on Windows with Go 1.24.1:
 - Dense version 3 actual CLI encoded the previously failing 1,628,423-byte document and recovered it byte-exactly with 1 and 4 workers, without changing NBT node limits. Regression coverage preserves version 2 recovery and rejects invalid chunk markers.
 - Nonbanner-default actual CLI encoded the 1,628,423-byte document with zero banner palette states and zero banner entities, recovering identical bytes with 1 and 4 workers. Also exercised default, `--banners`, `--banners=false`, and concrete `.litematic` recovery on a 1,025-byte payload containing leading/trailing zeros; integration tests passed.
 - Balanced-default actual CLI encoded the same 1,628,423-byte document as one 119×64×119 region (906,304 positions), replacing compact's 1×5×180,667 shape (903,335 positions) with 0.329% additional padding. Recovered byte-exactly with 1 and 4 workers. Explicit compact/bounded and concrete balanced output also recovered; the full integration suite passed.
+- Version 4 actual CLI encoded the 1,995,772,310-byte ZIP into 119 volumes at the default 16 MiB part size. First/last volumes were single 382×64×382 / 374×64×374 regions without banner entities. Full recovery with 1 and 4 workers matched SHA-256 `28f66a30ecbb8de1aa4f22e7f1c32c8326e94c508e5e7026af49747efd7983d5`. Integration and race-enabled suites passed, including renamed/reordered parts, missing/duplicate/mixed/corrupt sets, aggregate-integrity failure, collision safety, empty input and cancellation.
 - Catalog acquisition independently matched official generated reports against the live Mojang registry; native banner parsing exercised all 41 hashes × 16 colors × lengths 0–6. See [catalog provenance](internal/alphabet/PROVENANCE.md).
 
 Historical **concrete-only** external verification (not rerun for this expansion): Litemapy 0.11.0b0 import/translated re-export and WorldEdit 7.2.20 legacy import. Independently generated concrete fixtures and exact provenance remain in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md). These results do not establish dense interoperability.
@@ -120,6 +137,7 @@ Historical **concrete-only** external verification (not rerun for this expansion
 - Added dense version 3 resource-aware full-alphabet/nonbanner chunk fallback to balance banner NBT cost with ordinary-state density. Retained version 2 and concrete version 1 decoding.
 - Changed dense encoding to default to nonbanner states. Added `encode --banners` to opt into the full alphabet and resource-aware fallback, without changing version 3 markers or earlier-file decoding.
 - Changed dense's default layout from compact to balanced for three-dimensional rectangular output. Explicit compact and bounded policies, height/resource limits, logical chunk boundaries, and existing-file decoding are unchanged.
+- Added dense version 4 streaming multipart output and automatic whole-file recovery, preserving per-volume safety limits and versions 1–3 decoding. Large dense inputs no longer fail solely at the single-volume 32 MiB payload ceiling.
 
 ## License
 

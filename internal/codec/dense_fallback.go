@@ -37,11 +37,12 @@ type denseChunk struct {
 func planDenseChunks(
 	payload []byte,
 	name string,
+	manifest []byte,
 	full chunkGeometry,
 	fallback fallbackAlphabet,
 	banners bool,
 ) ([]denseChunk, int, error) {
-	length := len(name) + len(payload)
+	length := len(name) + len(manifest) + len(payload)
 	chunks := (length + denseChunkBytes - 1) / denseChunkBytes
 	plan := make([]denseChunk, chunks)
 	position := denseBootstrap
@@ -51,14 +52,7 @@ func planDenseChunks(
 	for index := range chunks {
 		start, size, _ := full.chunk(length, index)
 		if !useFallback {
-			for offset := range size {
-				logical := start + offset
-				if logical < len(name) {
-					data[offset] = name[logical]
-				} else {
-					data[offset] = payload[logical-len(name)]
-				}
-			}
+			fillDenseChunk(data[:size], start, name, manifest, payload)
 			cost := 0
 			for _, rank := range bytesToSymbols(data[:size], full) {
 				state, layers, err := alphabet.Unrank(rank)
@@ -85,13 +79,29 @@ func planDenseChunks(
 	return plan, position, nil
 }
 
+func fillDenseChunk(dst []byte, start int, name string, manifest, payload []byte) {
+	for len(dst) > 0 {
+		var copied int
+		switch {
+		case start < len(name):
+			copied = copy(dst, name[start:])
+		case start < len(name)+len(manifest):
+			copied = copy(dst, manifest[start-len(name):])
+		default:
+			copied = copy(dst, payload[start-len(name)-len(manifest):])
+		}
+		start += copied
+		dst = dst[copied:]
+	}
+}
+
 func scanDenseChunks(length, capacity int, version byte, rankAt func(int) *big.Int) ([]denseChunk, int, error) {
 	full := denseGeometry()
 	fallback := ordinaryFallback()
 	chunks := (length + denseChunkBytes - 1) / denseChunkBytes
 	// Reject impossible capacities before allocating an index for declared chunks.
 	minimum := full.positions(length)
-	if version == denseVersion {
+	if version == denseVersion || version == densePartVersion {
 		minimum += chunks
 	}
 	if minimum > capacity {
@@ -103,7 +113,7 @@ func scanDenseChunks(length, capacity int, version byte, rankAt func(int) *big.I
 		_, size, _ := full.chunk(length, index)
 		geometry := full
 		selected := denseChunk{position: position}
-		if version == denseVersion {
+		if version == denseVersion || version == densePartVersion {
 			if position >= capacity {
 				return nil, 0, fmt.Errorf("truncated dense chunk marker")
 			}

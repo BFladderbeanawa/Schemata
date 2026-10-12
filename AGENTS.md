@@ -187,9 +187,9 @@ Benchmark chunk sizes and conversion before freezing the dense format. Bounded c
 
 ## Resource limits
 
-This expansion changes density only; larger-file support is out of scope.
+Larger files use streaming multipart dense encoding under version 4, as specified in `docs/dense-v4.md`. Each part is a single balanced rectangular region by default; do not lift independent per-volume limits or load the complete original file into memory. Retain older single-volume decoding. Multipart identity, offsets, counts, original length and integrity fields are structure data, not a required sidecar.
 
-- Dense payload length is capped at 32 MiB (33,554,432 bytes), excluding header and padding. This is a payload ceiling, not a promise that every file at that size fits all other limits.
+- Dense payload length is capped at 32 MiB (33,554,432 bytes) per volume, excluding header and padding. Files above this ceiling automatically use multipart with a default 16 MiB part size. Explicit `--part-size-mib` in 1..32 forces multipart. At most 4096 parts; recover the complete file only after validating all parts and the aggregate SHA-256/CRC. This is a per-volume payload ceiling, not a promise that every part fits all other limits.
 - Preserve the existing concrete stream-capacity limit of 32 MiB, including header and padding. Do not silently relabel it as a payload limit.
 - Retain at most 64 Mi block positions, 256 MiB uncompressed NBT, nesting depth 64, and 262,144 NBT nodes unless a separately approved requirement changes them.
 - Apply payload, structure, NBT, node, banner-layer, chunk, and allocation limits independently. Banner entities can hit NBT limits before the payload ceiling.

@@ -2,6 +2,7 @@ package codec
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -16,10 +17,13 @@ import (
 )
 
 const (
-	denseVersion    = 3
-	denseBootstrap  = prefixBytes * 2
-	denseChunkBytes = 256
-	MaxDensePayload = 32 * 1024 * 1024
+	denseVersion       = 3
+	denseBootstrap     = prefixBytes * 2
+	denseChunkBytes    = 256
+	MaxDensePayload    = 32 * 1024 * 1024
+	densePartVersion   = 4
+	denseManifestBytes = 64
+	MaxDenseParts      = 4096
 )
 
 var concreteNames = [...]string{
@@ -68,10 +72,117 @@ type DenseOptions struct {
 	Banners bool
 }
 
+// EncodeDensePart writes a version 4 volume containing one canonical file part.
+func EncodeDensePart(payload []byte, name string, opts DenseOptions, part PartInfo) (volume.Volume, error) {
+	return EncodeDensePartContext(context.Background(), payload, name, opts, part)
+}
+
+// EncodeDensePartContext checks cancellation between bounded conversion batches.
+func EncodeDensePartContext(
+	ctx context.Context,
+	payload []byte,
+	name string,
+	opts DenseOptions,
+	part PartInfo,
+) (volume.Volume, error) {
+	if ctx == nil {
+		return volume.Volume{}, fmt.Errorf("encode context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return volume.Volume{}, fmt.Errorf("encode: %w", err)
+	}
+	if err := validateDensePart(part, uint64(len(payload))); err != nil {
+		return volume.Volume{}, fmt.Errorf("encode multipart manifest: %w", err)
+	}
+	if err := validateDensePartChecksum(part, payload); err != nil {
+		return volume.Volume{}, err
+	}
+	manifest := marshalDensePart(part)
+	return encodeDense(ctx, payload, name, opts, manifest[:], densePartVersion)
+}
+
+func validateDensePart(part PartInfo, payloadLength uint64) error {
+	if part.PartSize == 0 || part.PartSize > MaxDensePayload {
+		return fmt.Errorf("part size must be from 1 through 32 MiB")
+	}
+	if part.Count == 0 || part.Count > MaxDenseParts {
+		return fmt.Errorf("part count must be from 1 through %d", MaxDenseParts)
+	}
+	size := uint64(part.PartSize)
+	// Check a bounded total before rounding or multiplying untrusted lengths.
+	if part.TotalLength > size*MaxDenseParts {
+		return fmt.Errorf("total length exceeds multipart capacity")
+	}
+	count := max(uint64(1), (part.TotalLength+size-1)/size)
+	if uint64(part.Count) != count {
+		return fmt.Errorf("part count does not match total length and part size")
+	}
+	if part.Index >= part.Count {
+		return fmt.Errorf("part index is outside part count")
+	}
+	offset := uint64(part.Index) * size
+	if part.Offset != offset || offset > part.TotalLength {
+		return fmt.Errorf("part offset does not match index and part size")
+	}
+	if payloadLength != min(size, part.TotalLength-offset) {
+		return fmt.Errorf("part payload length does not match manifest")
+	}
+	return nil
+}
+
+func validateDensePartChecksum(part PartInfo, payload []byte) error {
+	if part.Count != 1 {
+		return nil
+	}
+	if crc32.ChecksumIEEE(payload) != part.Checksum {
+		return fmt.Errorf("full-file checksum mismatch")
+	}
+	if sha256.Sum256(payload) != part.ID {
+		return fmt.Errorf("full-file SHA256 mismatch")
+	}
+	return nil
+}
+
+func marshalDensePart(part PartInfo) [denseManifestBytes]byte {
+	var manifest [denseManifestBytes]byte
+	copy(manifest[:32], part.ID[:])
+	binary.BigEndian.PutUint64(manifest[32:40], part.TotalLength)
+	binary.BigEndian.PutUint64(manifest[40:48], part.Offset)
+	binary.BigEndian.PutUint32(manifest[48:52], part.Index)
+	binary.BigEndian.PutUint32(manifest[52:56], part.Count)
+	binary.BigEndian.PutUint32(manifest[56:60], part.Checksum)
+	binary.BigEndian.PutUint32(manifest[60:64], part.PartSize)
+	return manifest
+}
+
+func unmarshalDensePart(manifest []byte) PartInfo {
+	part := PartInfo{
+		TotalLength: binary.BigEndian.Uint64(manifest[32:40]),
+		Offset:      binary.BigEndian.Uint64(manifest[40:48]),
+		Index:       binary.BigEndian.Uint32(manifest[48:52]),
+		Count:       binary.BigEndian.Uint32(manifest[52:56]),
+		Checksum:    binary.BigEndian.Uint32(manifest[56:60]),
+		PartSize:    binary.BigEndian.Uint32(manifest[60:64]),
+	}
+	copy(part.ID[:], manifest[:32])
+	return part
+}
+
 // EncodeDense writes version 3 chunks, using only nonbanner states by default.
 // Banners enables the full alphabet with resource-aware nonbanner fallback.
 // Only .litematic can serialize the returned arbitrary-state volume.
 func EncodeDense(payload []byte, name string, opts DenseOptions) (volume.Volume, error) {
+	return encodeDense(context.Background(), payload, name, opts, nil, denseVersion)
+}
+
+func encodeDense(
+	ctx context.Context,
+	payload []byte,
+	name string,
+	opts DenseOptions,
+	manifest []byte,
+	version byte,
+) (volume.Volume, error) {
 	if err := validateName(name); err != nil {
 		return volume.Volume{}, fmt.Errorf("encode filename: %w", err)
 	}
@@ -83,8 +194,11 @@ func EncodeDense(payload []byte, name string, opts DenseOptions) (volume.Volume,
 	}
 	g := denseGeometry()
 	fallback := ordinaryFallback()
-	length := len(name) + len(payload)
-	plan, required, err := planDenseChunks(payload, name, g, fallback, opts.Banners)
+	length := len(name) + len(manifest) + len(payload)
+	plan, required, err := planDenseChunks(payload, name, manifest, g, fallback, opts.Banners)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return volume.Volume{}, fmt.Errorf("encode: %w", contextErr)
+	}
 	if err != nil {
 		return volume.Volume{}, err
 	}
@@ -128,7 +242,7 @@ func EncodeDense(payload []byte, name string, opts DenseOptions) (volume.Volume,
 	// Rank zero is palette index zero; zero-initialized blocks are canonical padding.
 	var header [prefixBytes]byte
 	copy(header[:8], magic)
-	header[8] = denseVersion
+	header[8] = version
 	binary.BigEndian.PutUint64(header[9:17], uint64(len(payload)))
 	binary.BigEndian.PutUint16(header[17:19], uint16(len(name)))
 	binary.BigEndian.PutUint32(header[19:23], crc32.ChecksumIEEE(payload))
@@ -146,52 +260,92 @@ func EncodeDense(payload []byte, name string, opts DenseOptions) (volume.Volume,
 	}
 	chunks := (length + denseChunkBytes - 1) / denseChunkBytes
 	workers := min(chunks, min(runtime.GOMAXPROCS(0), 256))
-	// Batches bound both conversion temporaries and completed results. Integrate
-	// symbols in logical order so palette and banner output never depend on timing.
-	for first := 0; first < chunks; first += workers {
-		batch := min(workers, chunks-first)
-		results := make([][]*big.Int, batch)
-		var wg sync.WaitGroup
-		wg.Add(batch)
-		for worker := range batch {
-			go func() {
-				defer wg.Done()
-				start, bytes, _ := g.chunk(length, first+worker)
-				var chunk [denseChunkBytes]byte
-				for offset := range bytes {
-					logical := start + offset
-					if logical < len(name) {
-						chunk[offset] = name[logical]
-					} else {
-						chunk[offset] = payload[logical-len(name)]
-					}
+	const batchChunks = 1024
+	maxDigits := fallback.geometry.digits[denseChunkBytes]
+	ordinaryResults := make([]uint16, min(chunks, batchChunks)*maxDigits)
+	fullResults := make([][]*big.Int, min(chunks, batchChunks))
+	// Workers persist across bounded batches; compact ordinary digits avoid a
+	// big.Int allocation and alphabet rank/unrank work for every nonbanner symbol.
+	jobs := make(chan int, workers)
+	var batchDone, workerDone sync.WaitGroup
+	workerDone.Add(workers)
+	for range workers {
+		go func() {
+			defer workerDone.Done()
+			var chunk [denseChunkBytes]byte
+			for index := range jobs {
+				start, size, _ := g.chunk(length, index)
+				fillDenseChunk(chunk[:size], start, name, manifest, payload)
+				slot := index % batchChunks
+				if plan[index].fallback {
+					digits := ordinaryResults[slot*maxDigits : slot*maxDigits+fallback.geometry.digits[size]]
+					ordinaryBytesToDigits(chunk[:size], digits)
+				} else {
+					fullResults[slot] = bytesToSymbols(chunk[:size], g)
 				}
-				geometry := g
-				if plan[first+worker].fallback {
-					geometry = fallback.geometry
-				}
-				results[worker] = bytesToSymbols(chunk[:bytes], geometry)
-			}()
-		}
-		wg.Wait()
-		for worker, digits := range results {
-			selected := plan[first+worker]
-			marker := int64(0)
-			if selected.fallback {
-				marker = 1
+				batchDone.Done()
 			}
-			if err := put(selected.position, big.NewInt(marker)); err != nil {
+		}()
+	}
+	defer func() { close(jobs); workerDone.Wait() }()
+	ordinaryPalette := make([]uint32, len(fallback.ranks))
+	for i, rank := range fallback.ranks {
+		ordinaryPalette[i] = ^uint32(0)
+		if index, ok := palette[uint64(rank)]; ok {
+			ordinaryPalette[i] = index
+		}
+	}
+	putOrdinary := func(position int, digit uint16) {
+		index := ordinaryPalette[digit]
+		if index == ^uint32(0) {
+			rank := fallback.ranks[digit]
+			if existing, ok := palette[uint64(rank)]; ok {
+				index = existing
+			} else {
+				index = uint32(len(v.Palette))
+				palette[uint64(rank)] = index
+				v.Palette = append(v.Palette, alphabet.States()[rank])
+			}
+			ordinaryPalette[digit] = index
+		}
+		v.Blocks[position] = index
+	}
+	for first := 0; first < chunks; first += batchChunks {
+		if err := ctx.Err(); err != nil {
+			return volume.Volume{}, fmt.Errorf("encode: %w", err)
+		}
+		batch := min(batchChunks, chunks-first)
+		batchDone.Add(batch)
+		for index := first; index < first+batch; index++ {
+			jobs <- index
+		}
+		batchDone.Wait()
+		// Integrate in logical order so palette and banner output remain stable.
+		for slot := range batch {
+			index := first + slot
+			selected := plan[index]
+			if selected.fallback {
+				putOrdinary(selected.position, uint16(fallback.indices[1]))
+				_, size, _ := g.chunk(length, index)
+				digits := ordinaryResults[slot*maxDigits : slot*maxDigits+fallback.geometry.digits[size]]
+				for offset, digit := range digits {
+					putOrdinary(selected.position+1+offset, digit)
+				}
+				continue
+			}
+			if err := put(selected.position, big.NewInt(0)); err != nil {
 				return volume.Volume{}, err
 			}
-			for offset, rank := range digits {
-				if selected.fallback {
-					rank = big.NewInt(int64(fallback.ranks[rank.Int64()]))
-				}
+			for offset, rank := range fullResults[slot] {
 				if err := put(selected.position+1+offset, rank); err != nil {
 					return volume.Volume{}, err
 				}
 			}
+			fullResults[slot] = nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return volume.Volume{}, fmt.Errorf("encode: %w", err)
 	}
 	return v, nil
 }
@@ -249,7 +403,9 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	if string(header[:8]) != magic {
 		return File{}, fmt.Errorf("invalid SCHEMATA header")
 	}
-	if header[8] != 2 && header[8] != denseVersion {
+	switch header[8] {
+	case 2, denseVersion, densePartVersion:
+	default:
 		return File{}, fmt.Errorf("unsupported encoding version %d", header[8])
 	}
 	payloadLength := binary.BigEndian.Uint64(header[9:17])
@@ -260,7 +416,11 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	if nameLength == 0 {
 		return File{}, fmt.Errorf("filename must be nonempty")
 	}
-	length := nameLength + int(payloadLength)
+	manifestLength := 0
+	if header[8] == densePartVersion {
+		manifestLength = denseManifestBytes
+	}
+	length := nameLength + manifestLength + int(payloadLength)
 	g := denseGeometry()
 	// Rank palette states once; banner positions override the ordinary rank.
 	ranks := make([]*big.Int, len(v.Palette))
@@ -290,9 +450,12 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 		return File{}, err
 	}
 	fallback := ordinaryFallback()
-	fallbackRanks := make([]*big.Int, len(fallback.ranks))
-	for i := range fallbackRanks {
-		fallbackRanks[i] = big.NewInt(int64(i))
+	ordinaryDigits := make([]int, len(ranks))
+	for i, rank := range ranks {
+		ordinaryDigits[i] = -1
+		if rank.IsInt64() && rank.Sign() >= 0 && rank.Int64() < int64(len(fallback.indices)) {
+			ordinaryDigits[i] = fallback.indices[rank.Int64()]
+		}
 	}
 	for position := used; position < len(v.Blocks); position++ {
 		if position%4096 == 0 {
@@ -318,6 +481,7 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 		go func() {
 			defer wg.Done()
 			symbols := make([]*big.Int, fallback.geometry.digits[denseChunkBytes])
+			digits := make([]uint16, fallback.geometry.digits[denseChunkBytes])
 			for workCtx.Err() == nil {
 				index := int(next.Add(1) - 1)
 				if index >= chunks {
@@ -325,29 +489,26 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 				}
 				start, bytes, _ := g.chunk(length, index)
 				selected := plan[index]
-				geometry := g
-				if selected.fallback {
-					geometry = fallback.geometry
-				}
 				var conversionError error
-				for offset := range geometry.digits[bytes] {
-					rank := rankAt(selected.position + offset)
-					if selected.fallback {
-						if !rank.IsInt64() || rank.Int64() >= int64(len(fallback.indices)) {
-							conversionError = fmt.Errorf("invalid fallback symbol")
-							break
-						}
-						mapped := fallback.indices[rank.Int64()]
+				if selected.fallback {
+					count := fallback.geometry.digits[bytes]
+					for offset := range count {
+						mapped := ordinaryDigits[v.Blocks[selected.position+offset]]
 						if mapped < 0 {
 							conversionError = fmt.Errorf("banner in fallback chunk")
 							break
 						}
-						rank = fallbackRanks[mapped]
+						digits[offset] = uint16(mapped)
 					}
-					symbols[offset] = rank
-				}
-				if conversionError == nil {
-					conversionError = symbolsToBytes(stream[start:start+bytes], symbols[:geometry.digits[bytes]], geometry)
+					if conversionError == nil {
+						conversionError = ordinaryDigitsToBytes(stream[start:start+bytes], digits[:count])
+					}
+				} else {
+					count := g.digits[bytes]
+					for offset := range count {
+						symbols[offset] = rankAt(selected.position + offset)
+					}
+					conversionError = symbolsToBytes(stream[start:start+bytes], symbols[:count], g)
 				}
 				if err := conversionError; err != nil {
 					failureOnce.Do(func() { failure = fmt.Errorf("dense chunk %d: %w", index, err); cancel() })
@@ -367,9 +528,23 @@ func decodeDense(ctx context.Context, v volume.Volume, workers int) (File, error
 	if err := validateName(name); err != nil {
 		return File{}, fmt.Errorf("decode filename: %w", err)
 	}
-	payload := stream[nameLength:]
+	payloadStart := nameLength + manifestLength
+	payload := stream[payloadStart:]
+	var part *PartInfo
+	if manifestLength != 0 {
+		decoded := unmarshalDensePart(stream[nameLength:payloadStart])
+		if err := validateDensePart(decoded, payloadLength); err != nil {
+			return File{}, fmt.Errorf("decode multipart manifest: %w", err)
+		}
+		part = &decoded
+	}
 	if crc32.ChecksumIEEE(payload) != binary.BigEndian.Uint32(header[19:23]) {
 		return File{}, fmt.Errorf("payload checksum mismatch")
 	}
-	return File{Name: name, Payload: payload}, nil
+	if part != nil {
+		if err := validateDensePartChecksum(*part, payload); err != nil {
+			return File{}, err
+		}
+	}
+	return File{Name: name, Payload: payload, Part: part}, nil
 }

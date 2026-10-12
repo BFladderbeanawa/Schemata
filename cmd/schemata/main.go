@@ -74,6 +74,7 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	banners := fs.Bool("banners", false, "enable banner symbols in dense encoding (disabled by default)")
 	policy := fs.String("layout", "", "balanced (default), compact (minimum positions/units), or bounded")
 	padding := fs.Int("padding-percent", 25, "bounded layout extra positions/units as percent of required capacity (0–100)")
+	partSize := fs.Int("part-size-mib", 16, "dense multipart payload per volume (1–32 MiB); explicit flag forces multipart")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata encode [flags] input-file output.litematic|output.schematic")
 		fmt.Fprintln(help, "dense defaults to nonbanner states; --banners enables the full alphabet with resource-aware fallback")
@@ -88,13 +89,16 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if *height == 0 {
 		return "", true, errors.New("max height must be a multiple of 16 from 16 through 384")
 	}
-	modeSet, policySet := false, false
+	modeSet, policySet, partSizeSet := false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "encoding" {
 			modeSet = true
 		}
 		if f.Name == "layout" {
 			policySet = true
+		}
+		if f.Name == "part-size-mib" {
+			partSizeSet = true
 		}
 	})
 	if policySet && *policy == "" {
@@ -119,6 +123,12 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if *banners && *mode != "dense" {
 		return "", true, errors.New("banners require dense encoding")
 	}
+	if *partSize < 1 || *partSize > 32 {
+		return "", true, errors.New("part size must be from 1 through 32 MiB")
+	}
+	if partSizeSet && *mode != "dense" {
+		return "", true, errors.New("multipart encoding requires dense .litematic output")
+	}
 	opts := layout.Options{MaxHeight: *height, Policy: *policy, PaddingPercent: *padding}
 	selectLayout := layout.Select
 	if *mode == "dense" {
@@ -126,6 +136,20 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	}
 	if _, err := selectLayout(1, opts); err != nil {
 		return "", true, err
+	}
+	info, err := os.Stat(fs.Arg(0))
+	if err != nil {
+		return "", false, fmt.Errorf("stat input: %w", err)
+	}
+	if *mode == "dense" && (partSizeSet || info.Size() > codec.MaxDensePayload) {
+		path, err := encodeParts(
+			ctx,
+			fs.Arg(0),
+			fs.Arg(1),
+			*partSize*1024*1024,
+			codec.DenseOptions{Layout: opts, Banners: *banners},
+		)
+		return path, false, err
 	}
 	payload, err := readPayload(fs.Arg(0))
 	if err != nil {
@@ -156,6 +180,7 @@ func decode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	workers := fs.Int("workers", min(runtime.GOMAXPROCS(0), 256), "concurrent chunk/unit decoding workers (1–256)")
 	fs.Usage = func() {
 		fmt.Fprintln(help, "usage: schemata decode [flags] input.litematic|input.schematic destination-directory")
+		fmt.Fprintln(help, "multipart: supply a .parts directory or any part file; all parts must be together")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -178,6 +203,14 @@ func decode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 			return "", true, err
 		}
 	}
+	info, err := os.Stat(fs.Arg(0))
+	if err != nil {
+		return "", false, fmt.Errorf("stat input: %w", err)
+	}
+	if info.IsDir() {
+		path, err := decodeParts(ctx, fs.Arg(0), fs.Arg(1), *name, *workers)
+		return path, false, err
+	}
 	ext, err := formatExtension(fs.Arg(0))
 	if err != nil {
 		return "", true, err
@@ -189,6 +222,10 @@ func decode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	file, err := codec.Decode(ctx, v, *workers)
 	if err != nil {
 		return "", false, err
+	}
+	if file.Part != nil {
+		path, err := decodeParts(ctx, fs.Arg(0), fs.Arg(1), *name, *workers)
+		return path, false, err
 	}
 	filename := file.Name
 	if nameSet {
