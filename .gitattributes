@@ -1,0 +1,2 @@
+# Embedded catalog bytes and provenance hashes are pinned to LF on every host.
+internal/alphabet/*.tsv text eol=lf
