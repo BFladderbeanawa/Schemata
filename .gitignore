@@ -3,3 +3,5 @@
 /schemata.exe
 # Local-only documentation: never track or publish.
 /docs/
+/internal/alphabet/PROVENANCE.md
+/internal/schematic/testdata/PROVENANCE.md
