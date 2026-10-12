@@ -18,9 +18,9 @@ func TestSelectLayouts(t *testing.T) {
 		{name: "defaults", units: 1, x: 1, y: 1, z: 1},
 		{name: "balanced cube", units: 9, x: 3, y: 3, z: 3},
 		{name: "balanced capped", units: 9, opts: layout.Options{MaxHeight: 16}, x: 3, y: 1, z: 3},
-		{name: "compact prime", units: 5, opts: layout.Options{Policy: "compact"}, x: 1, y: 1, z: 5},
+		{name: "compact prime", units: 5, opts: layout.Options{Policy: "compact"}, x: 1, y: 5, z: 1},
 		{name: "compact height tie", units: 6, opts: layout.Options{Policy: "compact"}, x: 1, y: 3, z: 2},
-		{name: "bounded zero", units: 5, opts: layout.Options{Policy: "bounded"}, x: 1, y: 1, z: 5},
+		{name: "bounded zero", units: 5, opts: layout.Options{Policy: "bounded"}, x: 1, y: 5, z: 1},
 		{name: "bounded floor", units: 3, opts: layout.Options{Policy: "bounded", PaddingPercent: 25}, x: 1, y: 3, z: 1},
 		{name: "bounded allowance", units: 5, opts: layout.Options{Policy: "bounded", PaddingPercent: 25}, x: 1, y: 3, z: 2},
 		{name: "bounded cube", units: 5, opts: layout.Options{Policy: "bounded", PaddingPercent: 100}, x: 2, y: 2, z: 2},
@@ -126,7 +126,6 @@ func TestSelectResourceLimits(t *testing.T) {
 		{name: "padding negative", units: 1, opts: layout.Options{PaddingPercent: -1}},
 		{name: "padding too large", units: 1, opts: layout.Options{PaddingPercent: 101}},
 		{name: "unknown policy", units: 1, opts: layout.Options{Policy: "Balanced"}},
-		{name: "balanced padding exceeds cap", units: volume.MaxBlocks / 4096, opts: layout.Options{MaxHeight: 384}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,8 +141,40 @@ func TestSelectResourceLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			n, err := volume.Count(got.X, got.Y, got.Z)
-			if err != nil || n != volume.MaxBlocks || got.Colors != nil {
+			if err != nil || n != volume.MaxBlocks || got.Colors != nil || got.Y > layout.DefaultMaxHeight {
 				t.Fatalf("maximum layout = %+v, count %d, error %v", got, n, err)
+			}
+		})
+	}
+}
+
+func TestSelectHeightCaps(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		units   int
+		opts    layout.Options
+		x, y, z int
+	}{
+		{name: "raised default cube", units: 4097, x: 17, y: 17, z: 17},
+		{name: "default cube", units: 15625, x: 26, y: 24, z: 26},
+		{name: "unlimited cube", units: 15625, opts: layout.Options{NoHeightLimit: true}, x: 25, y: 25, z: 25},
+		{name: "default cap fallback", units: volume.MaxBlocks / 4096, x: 16, y: 16, z: 64},
+		{name: "unlimited fallback", units: volume.MaxBlocks / 4096, opts: layout.Options{NoHeightLimit: true}, x: 16, y: 32, z: 32},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := layout.Select(tt.units, tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.X != tt.x*16 || got.Y != tt.y*16 || got.Z != tt.z*16 {
+				t.Fatalf("dimensions = (%d,%d,%d), want (%d,%d,%d)", got.X, got.Y, got.Z, tt.x*16, tt.y*16, tt.z*16)
+			}
+			n, err := volume.Count(got.X, got.Y, got.Z)
+			if err != nil || n < tt.units*4096 {
+				t.Fatalf("insufficient capacity: count %d, error %v", n, err)
 			}
 		})
 	}

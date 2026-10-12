@@ -89,15 +89,15 @@ A unit is 16×16×16 blocks (2048 bytes). Traverse complete units in y/x/z order
 
 ## Layout contract
 
-Concrete: `requiredUnits=ceil((23+filenameBytes+payloadBytes)/2048)`. Dimensions are positive multiples of 16. `--max-height` defaults to 64 and accepts multiples of 16 from 16 through 384; it is a cap.
+Concrete: `requiredUnits=ceil((23+filenameBytes+payloadBytes)/2048)`. Dimensions are positive multiples of 16. `--max-height` defaults to **384** and accepts multiples of 16 from 16 through 384; it is a cap, not an exact height. `--max-height 0` removes the cap: dense layouts are then bounded only by the 64 Mi position limit, and concrete layouts by the signed-short storage maximum of 32752 blocks (2047 units). An uncapped height can exceed the modern world's 384-block vertical range; that is a layout choice with no placement guarantee.
 
-- `balanced` (concrete default): choose the smallest integer cube side `s` with `s*s*min(s,heightCapUnits) >= requiredUnits`; use `(s,min(s,heightCapUnits),s)`. This prioritizes similar axes and permits rectangular padding.
+- `balanced` (concrete default): choose the smallest integer cube side `s` with `s*s*min(s,heightCapUnits) >= requiredUnits`; use `(s,min(s,heightCapUnits),s)`. This prioritizes similar axes and permits rectangular padding. When that product would exceed the resource limit, balanced selects the minimum-spread rectangle within the limit instead, so a representable capacity is never rejected.
 - `compact`: minimize total units among all feasible rectangles, then minimize the balance metric below.
 - `bounded`: `--padding-percent` is an integer from 0 through 100, default **25**. Permit at most `requiredUnits + floor(requiredUnits*paddingPercent/100)` units. Minimize the balance metric, then volume.
 
-For compact/bounded, enumerate x≤z (symmetric horizontal choices), y within the height cap. Balance is first `max(x,y,z)-min(x,y,z)`, then `(x-y)^2+(y-z)^2+(z-x)^2`. Remaining ties prefer larger y, then smaller x, then smaller z. Selection is deterministic and independent of worker scheduling.
+For compact/bounded, enumerate x≤z (symmetric horizontal choices), y within the height cap. Balance is first `max(x,y,z)-min(x,y,z)`, then `(x-y)^2+(y-z)^2+(z-x)^2`. Remaining ties prefer larger y, then smaller x, then smaller z. Selection is deterministic and independent of worker scheduling. Without a cap, the height bound becomes the volume limit, so compact/bounded enumeration cost grows with the required capacity.
 
-Dense uses the same balance metric and deterministic ties in **block positions**, with arbitrary positive dimensions under the same height cap. `balanced` is the dense default: choose the smallest sufficient block-based cube with capped y, allowing padding to avoid long, thin exact-factorization layouts. Explicit `compact` minimizes total positions before balance and may produce thin or very long rectangles. `bounded` permits at most `requiredPositions + floor(requiredPositions*paddingPercent/100)` positions. Required capacity includes the bootstrap, filename, payload, and fixed chunk rounding. Every layout writes one rectangular region; 256-byte codec chunks are logical conversion batches, not separate physical regions. [Dense layout contract](docs/dense-layout.md).
+Dense uses the same balance metric and deterministic ties in **block positions**, with arbitrary positive dimensions under the same height cap (default 384 blocks, `--max-height 0` for no cap). `balanced` is the dense default: choose the smallest sufficient block-based cube with capped y, allowing padding to avoid long, thin exact-factorization layouts; without a cap the result is a true cube whenever one fits the 64 Mi position limit. Explicit `compact` minimizes total positions before balance and may produce thin or very long rectangles. `bounded` permits at most `requiredPositions + floor(requiredPositions*paddingPercent/100)` positions. Required capacity includes the bootstrap, filename, payload, and fixed chunk rounding. Every layout writes one rectangular region; 256-byte codec chunks are logical conversion batches, not separate physical regions. [Dense layout contract](docs/dense-la…
 
 ## Recovery and safety
 
@@ -138,6 +138,7 @@ Historical **concrete-only** external verification (not rerun for this expansion
 - Changed dense encoding to default to nonbanner states. Added `encode --banners` to opt into the full alphabet and resource-aware fallback, without changing version 3 markers or earlier-file decoding.
 - Changed dense's default layout from compact to balanced for three-dimensional rectangular output. Explicit compact and bounded policies, height/resource limits, logical chunk boundaries, and existing-file decoding are unchanged.
 - Added dense version 4 streaming multipart output and automatic whole-file recovery, preserving per-volume safety limits and versions 1–3 decoding. Large dense inputs no longer fail solely at the single-volume 32 MiB payload ceiling.
+- Raised the `--max-height` default from 64 to **384** blocks (the full modern world height) and made `--max-height 0` remove the cap for taller, cube-like layouts. Balanced layouts whose cube product would exceed the resource limit now fall back to the minimum-spread rectangle inside the limit instead of failing, and uncapped concrete heights stay within signed-short storage.
 
 ## License
 

@@ -69,7 +69,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func encode(ctx context.Context, args []string, help io.Writer) (string, bool, error) {
 	fs := flag.NewFlagSet("encode", flag.ContinueOnError)
 	fs.SetOutput(help)
-	height := fs.Int("max-height", 64, "height cap: multiple of 16 from 16 through 384 blocks")
+	height := fs.Int("max-height", layout.DefaultMaxHeight, "height cap in blocks: multiple of 16 from 16 through 384, or 0 for no cap")
 	mode := fs.String("encoding", "", "dense (.litematic default) or concrete (.schematic default)")
 	banners := fs.Bool("banners", false, "enable banner symbols in dense encoding (disabled by default)")
 	policy := fs.String("layout", "", "balanced (default), compact (minimum positions/units), or bounded")
@@ -85,9 +85,6 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	}
 	if fs.NArg() != 2 {
 		return "", true, errors.New("encode requires input file and output schematic path")
-	}
-	if *height == 0 {
-		return "", true, errors.New("max height must be a multiple of 16 from 16 through 384")
 	}
 	modeSet, policySet, partSizeSet := false, false, false
 	fs.Visit(func(f *flag.Flag) {
@@ -129,7 +126,7 @@ func encode(ctx context.Context, args []string, help io.Writer) (string, bool, e
 	if partSizeSet && *mode != "dense" {
 		return "", true, errors.New("multipart encoding requires dense .litematic output")
 	}
-	opts := layout.Options{MaxHeight: *height, Policy: *policy, PaddingPercent: *padding}
+	opts := layout.Options{MaxHeight: *height, NoHeightLimit: *height == 0, Policy: *policy, PaddingPercent: *padding}
 	selectLayout := layout.Select
 	if *mode == "dense" {
 		selectLayout = layout.SelectDense

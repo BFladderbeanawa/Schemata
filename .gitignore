@@ -5,3 +5,10 @@
 /docs/
 /internal/alphabet/PROVENANCE.md
 /internal/schematic/testdata/PROVENANCE.md
+
+*.parts
+*.litematic
+*.zip
+
+recover
+

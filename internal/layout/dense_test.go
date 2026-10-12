@@ -16,14 +16,14 @@ func TestSelectDenseAvoidsDegenerateRectangles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.X != got.Z || got.Y != min(got.X, 64) {
+			if got.X != got.Z || got.Y != min(got.X, layout.DefaultMaxHeight) {
 				t.Fatalf("degenerate rectangle: (%d,%d,%d)", got.X, got.Y, got.Z)
 			}
 			if got.X*got.Y*got.Z < required {
 				t.Fatal("rectangle cannot hold stream")
 			}
 			previous := got.X - 1
-			if previous*min(previous, 64)*previous >= required {
+			if previous*min(previous, layout.DefaultMaxHeight)*previous >= required {
 				t.Fatal("rectangle wastes a complete outer layer")
 			}
 		})
@@ -40,7 +40,7 @@ func TestSelectDenseLayouts(t *testing.T) {
 	}{
 		{name: "single position", positions: 1, x: 1, y: 1, z: 1},
 		{name: "prime within height", positions: 61, opts: layout.Options{Policy: "compact"}, x: 1, y: 61, z: 1},
-		{name: "prime beyond height", positions: 67, opts: layout.Options{Policy: "compact"}, x: 1, y: 1, z: 67},
+		{name: "prime within default cap", positions: 67, opts: layout.Options{Policy: "compact"}, x: 1, y: 67, z: 1},
 		{
 			name: "prime explicit cap", positions: 17,
 			opts: layout.Options{Policy: "compact", MaxHeight: 16}, x: 1, y: 1, z: 17,
@@ -142,10 +142,6 @@ func TestSelectDenseResourceLimits(t *testing.T) {
 		{name: "padding negative", positions: 1, opts: layout.Options{PaddingPercent: -1}},
 		{name: "padding too large", positions: 1, opts: layout.Options{PaddingPercent: 101}},
 		{name: "unknown policy", positions: 1, opts: layout.Options{Policy: "Balanced"}},
-		{
-			name: "balanced padding exceeds cap", positions: volume.MaxBlocks,
-			opts: layout.Options{Policy: "balanced", MaxHeight: 384},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,7 +159,7 @@ func TestSelectDenseResourceLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			n, err := volume.CountDense(got.X, got.Y, got.Z)
-			if err != nil || n != volume.MaxBlocks || got.Y > 64 {
+			if err != nil || n != volume.MaxBlocks || got.Y > layout.DefaultMaxHeight {
 				t.Fatalf("maximum layout = %+v, count %d, error %v", got, n, err)
 			}
 		})
@@ -179,6 +175,41 @@ func TestSelectDenseResourceLimits(t *testing.T) {
 			}
 			if got.X != 512 || got.Y != 256 || got.Z != 512 {
 				t.Fatalf("maximum-height dimensions = (%d,%d,%d), want (512,256,512)", got.X, got.Y, got.Z)
+			}
+		})
+	}
+}
+
+func TestSelectDenseHeightCaps(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		positions int
+		opts      layout.Options
+		x, y, z   int
+	}{
+		{name: "raised default cube", positions: 4097, x: 17, y: 17, z: 17},
+		{name: "default capped cube", positions: 56623105, x: 385, y: 384, z: 385},
+		{name: "unlimited cube", positions: 56623105, opts: layout.Options{NoHeightLimit: true}, x: 385, y: 385, z: 385},
+		{name: "default fallback", positions: volume.MaxBlocks, x: 256, y: 256, z: 1024},
+		{name: "unlimited fallback", positions: volume.MaxBlocks, opts: layout.Options{NoHeightLimit: true}, x: 256, y: 512, z: 512},
+		{name: "unlimited compact", positions: 67, opts: layout.Options{Policy: "compact", NoHeightLimit: true}, x: 1, y: 67, z: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := layout.SelectDense(tt.positions, tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.X != tt.x || got.Y != tt.y || got.Z != tt.z {
+				t.Fatalf("dimensions = (%d,%d,%d), want (%d,%d,%d)", got.X, got.Y, got.Z, tt.x, tt.y, tt.z)
+			}
+			if count, err := volume.CountDense(got.X, got.Y, got.Z); err != nil || count < tt.positions {
+				t.Fatalf("insufficient capacity: count %d, error %v", count, err)
+			}
+			if !tt.opts.NoHeightLimit && got.Y > layout.DefaultMaxHeight {
+				t.Fatalf("height %d exceeds the default cap", got.Y)
 			}
 		})
 	}

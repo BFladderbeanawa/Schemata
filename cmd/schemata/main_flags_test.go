@@ -12,7 +12,7 @@ func TestInvalidFlagsDoNotPublishOutput(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "zero height", args: []string{"encode", "--max-height", "0", "missing.bin", "out.litematic"}},
+		{name: "subunit height", args: []string{"encode", "--max-height", "8", "missing.bin", "out.litematic"}},
 		{name: "nonunit height", args: []string{"encode", "--max-height", "17", "missing.bin", "out.litematic"}},
 		{name: "overworld height", args: []string{"encode", "--max-height", "400", "missing.bin", "out.schematic"}},
 		{name: "empty layout", args: []string{"encode", "--layout", "", "missing.bin", "out.litematic"}},

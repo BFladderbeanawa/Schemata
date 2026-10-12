@@ -18,10 +18,15 @@ import (
 
 func TestCLIByteExactRecovery(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, ext, mode string }{
+	for _, tc := range []struct {
+		name, ext, mode string
+		extra           []string
+	}{
 		{name: "dense default", ext: ".litematic"},
+		{name: "dense uncapped height", ext: ".litematic", extra: []string{"--max-height", "0"}},
 		{name: "concrete litematic", ext: ".litematic", mode: "concrete"},
 		{name: "concrete legacy default", ext: ".schematic"},
+		{name: "concrete legacy uncapped height", ext: ".schematic", extra: []string{"--max-height", "0"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -31,7 +36,9 @@ func TestCLIByteExactRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			structure := filepath.Join(dir, "archive"+tc.ext)
+			// Later occurrences win, so extra flags override the compact defaults.
 			encodeArgs := []string{"encode", "--max-height", "16", "--layout", "compact"}
+			encodeArgs = append(encodeArgs, tc.extra...)
 			if tc.mode != "" {
 				encodeArgs = append(encodeArgs, "--encoding", tc.mode)
 			}

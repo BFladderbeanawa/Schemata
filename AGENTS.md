@@ -147,7 +147,7 @@ Dense dimensions may be any positive integers. Remove complete-16-cubed-unit, co
 
 Dense capacity calculations include bootstrap/header, filename, chunk rounding, and payload positions. Concrete uses `requiredUnits = ceil((headerBytes + payloadBytes) / 2048)`. Never apply concrete bytes-per-unit assumptions to dense structures.
 
-Retain `--max-height` as a cap, not an exact height: default 64 blocks, accepting multiples of 16 from 16 through 384. The flag's granularity does not force dense output dimensions to be multiples of 16; smaller inputs may have any positive height within the cap.
+Retain `--max-height` as a cap, not an exact height: default 384 blocks, accepting multiples of 16 from 16 through 384, plus `0` to remove the cap. The flag's granularity does not force dense output dimensions to be multiples of 16; smaller inputs may have any positive height within the cap. Without a cap, dense height is bounded only by the 64 Mi position limit and concrete height by signed-short storage (2047 units / 32752 blocks). When the balanced cube construction would exceed those limits, select the minimum-spread rectangle within them instead of failing. Do not claim placement recovery for heights above the modern world range.
 
 | `--layout` | Objective |
 | --- | --- |
