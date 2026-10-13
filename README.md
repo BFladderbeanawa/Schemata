@@ -4,7 +4,7 @@ Stores arbitrary file bytes and their UTF-8 basename in Minecraft schematic stru
 
 ## Build and use
 
-Requires Go 1.24 or newer. No runtime Go dependencies.
+Requires Go 1.24 or newer. One runtime dependency: `github.com/klauspost/compress` v1.18.0 (zstd, packed mode only).
 Windows PowerShell:
 
 ```powershell
@@ -21,7 +21,7 @@ Linux/macOS:
 ```sh
 go build -o schemata ./cmd/schemata
 ./schemata encode report.pdf archive.litematic
-./schemata encode --banners report.pdf banner-dense.litematic
+./schemata encode --encoding dense --banners report.pdf banner-dense.litematic
 ./schemata encode --encoding concrete --layout balanced report.pdf concrete.litematic
 ./schemata encode --layout bounded --padding-percent 25 report.pdf archive.schematic
 ./schemata decode --workers 4 archive.litematic recovered
@@ -30,15 +30,26 @@ go build -o schemata ./cmd/schemata
 
 Flags precede positional arguments. Decode creates the destination directory when absent. Both commands print the actual output path and never overwrite: collisions use `report (1).pdf`, `report (2).pdf`, etc. Diagnostics go to stderr; exit codes are 0 (success), 1 (runtime failure), and 2 (usage error).
 
-### Large files: streaming multipart
+### Packed: smallest files
 
-Both encodings automatically use streaming multipart output when input exceeds single-volume capacity: 32 MiB payload for dense, or 32 MiB minus the 23-byte header and UTF-8 basename for concrete. Default part payload is 16 MiB. Each volume is one balanced rectangular region; no extra flags are needed for large inputs. For requested `1.litematic` or `1.schematic`, output is a collision-free `1.parts` directory containing numbered files in the requested format. The command prints that directory, not a nonexistent single file. Existing directories receive numeric suffixes.
+Packed (version 6) is the `.litematic` default. It compresses each part with zstd and writes the compressed bits directly into the Litematica block-state array over a fixed palette of 1,024 full opaque cube states, 10 bits per position, with no block entities. It optimizes file size, not positions per byte. Input that is already compressed does not shrink. Inputs above the part size (default 64 MiB, `--part-size-mib` 1–79) automatically become a `.parts` directory. An explicit `--part-size-mib` forces multipart. `--encoding packed` with `.schematic` is rejected.
 
 ```powershell
-.\schemata.exe encode large.zip 1.litematic
+.\schemata.exe encode --workers 4 large.zip archive.litematic
+.\schemata.exe decode --workers 4 archive.parts recovered
+```
+
+`encode --workers` and `decode --workers` process up to that many parts concurrently, one single-threaded zstd frame per part. Workers never change the logical output. Memory grows linearly with workers, roughly 200 MiB per worker at the default part size (an estimate, not measured). Decode writes verified parts into a temporary file inside the destination directory, so it needs free disk equal to the original length. It publishes only after every part's header CRC, decompressed length, CRC-32, and SHA-256, the group identifier, and the aggregate digest validate. Wire specification: [packed version 6](docs/packed-v6.md).
+
+### Large files: streaming multipart (dense and concrete)
+
+Dense and concrete automatically use streaming multipart output when input exceeds single-volume capacity: 32 MiB payload for dense, or 32 MiB minus the 23-byte header and UTF-8 basename for concrete. Default part payload is 16 MiB. Each volume is one balanced rectangular region; no extra flags are needed for large inputs. For requested `1.litematic` or `1.schematic`, output is a collision-free `1.parts` directory containing numbered files in the requested format. The command prints that directory, not a nonexistent single file. Existing directories receive numeric suffixes.
+
+```powershell
+.\schemata.exe encode --encoding dense large.zip 1.litematic
 .\schemata.exe decode --workers 4 1.parts recovered
 # Force multipart or choose part size (1–32 MiB):
-.\schemata.exe encode --part-size-mib 8 large.zip archive.litematic
+.\schemata.exe encode --encoding dense --part-size-mib 8 large.zip archive.litematic
 # Concrete multipart in either format:
 .\schemata.exe encode --encoding concrete --part-size-mib 8 large.zip concrete.litematic
 .\schemata.exe encode --part-size-mib 8 large.zip concrete.schematic
@@ -54,10 +65,13 @@ Encoding hashes the source in a streaming prepass, then reads/encodes/writes one
 
 | Mode | Output formats | Default layout | Recovery guarantee |
 |---|---|---|---|
+| `packed` (version 6) | `.litematic` | `balanced` | Byte-exact through Schemata's own writer/reader; designed for Litematica loading (not yet verified in Litematica) |
 | `dense` (writes version 3 single-volume / 4 multipart; reads 2–4) | `.litematic` | `balanced` | Byte-exact through Schemata's own writer/reader only |
 | `concrete` (version 1 single-volume / 5 multipart) | `.litematic`, `.schematic` | `balanced` | Existing concrete encoding; translation without rotation or mirroring |
 
-With no `--encoding`, `.litematic` selects dense and `.schematic` selects concrete. Explicit `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding concrete` retains concrete `.litematic` output. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
+With no `--encoding`, `.litematic` selects packed and `.schematic` selects concrete. Explicit `--encoding packed` or `--encoding dense` with `.schematic` is rejected, never downgraded. Explicit `--encoding dense` and `--encoding concrete` remain available for `.litematic`. Decode detects the in-structure identifier/version; no encoding flag is needed. An explicit layout overrides the mode's default.
+
+The packed palette is every Java 1.20.1 state with `isSolidRender(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)` true and no block entity: 1,989 states across 382 blocks, probed from the pinned server jar. The first 1,024 in canonical catalog order are used, spanning 217 blocks with `note_block` at symbols 454–1023. Every position is a solid cube. The reader maps states by identity, so palette reordering or pruning does not affect recovery. States outside the selection, block entities, entities, ticks, and nonzero padding are rejected.
 
 Dense encoding defaults to the **23,815 nonbanner vanilla Java 1.20.1 complete block states**, including directional/transient states and all three distinct air types. No banner blocks or banner tile entities are emitted. Use `encode --banners` to enable the full alphabet: all **24,135 registered states** plus native banner base colors, properties, and ordered zero-through-six-layer pattern/color lists. All **41 native pattern hashes** accepted by the pinned game parser are included, including explicit base pattern `b`; repeated or obscured layers are data. The full combinatorial alphabet has **25,540,862,200,767,107,655 symbols**, ranked without materializing combinations. `--banners=false` explicitly disables banners; `--banners` is rejected for concrete encoding. Decode needs no banner flag and still reads existing banner-encoded files. [Catalog provenance and reproducible independent validation](internal/alphabet/PROVENANCE.md).
 
@@ -130,10 +144,12 @@ Verified for the dense expansion on Windows with Go 1.24.1:
 - Version 4 actual CLI encoded the 1,995,772,310-byte ZIP into 119 volumes at the default 16 MiB part size. First/last volumes were single 382×64×382 / 374×64×374 regions without banner entities. Full recovery with 1 and 4 workers matched SHA-256 `28f66a30ecbb8de1aa4f22e7f1c32c8326e94c508e5e7026af49747efd7983d5`. Integration and race-enabled suites passed, including renamed/reordered parts, missing/duplicate/mixed/corrupt sets, aggregate-integrity failure, collision safety, empty input and cancellation.
 - Concrete version 5 actual CLI encoded a 33,554,439-byte input in both formats into 3 default-size volumes, recovered byte-exactly with 1 and 4 workers (SHA-256 `873ad5c7c2a40a715b76d22d908a138b98b5faf0cf4f9b5098be14c3c6ebffe1`). Explicit 32 MiB requests produced 2 capped-capacity parts and exact recovery. Also exercised 3-part UTF-8-named recovery, renamed parts, destination/set collisions, replacement names, empty parts, missing/corrupt rejection without destination publication, concrete v1 and dense v4 recovery. Standard, integration and race-enabled integration suites passed. No new external-tool checks were run.
 - Catalog acquisition independently matched official generated reports against the live Mojang registry; native banner parsing exercised all 41 hashes × 16 colors × lengths 0–6. See [catalog provenance](internal/alphabet/PROVENANCE.md).
+- Packed version 6 on Windows with Go 1.24.1: standard, integration, and race-enabled packed CLI suites passed. Tests recompute the 1,024-state selection from the committed 1,989-state probe output and check the pinned list digest independently of the writer. They also cover stored fallback, zstd frame rejection (trailing data, wrong content size, checksum flag, skippable, truncated), header/padding/CRC/SHA-256 corruption, palette reordering/pruning with a prepended air entry, outside states, block entities, `.schematic` rejection, worker-independent part bytes, renamed parts, missing/duplicate/mixed-group/aggregate-mismatch/foreign sets, forced empty multipart, and cancellation without publication.
+- Packed actual CLI with default options: a 1,628,423-byte `.docx` became one 1,633,737-byte `.litematic` (1.0033× input; already compressed). A 181,495,472-byte ZIP became 3 parts totalling 171,768,455 bytes (0.9464×). Both recovered byte-exactly with 1 and 4 workers (SHA-256 compared). Single runs; not a benchmark.
 
 Historical **concrete-only** external verification (not rerun for this expansion): Litemapy 0.11.0b0 import/translated re-export and WorldEdit 7.2.20 legacy import. Independently generated concrete fixtures and exact provenance remain in [testdata/PROVENANCE.md](internal/schematic/testdata/PROVENANCE.md). These results do not establish dense interoperability.
 
-**Not verified or guaranteed for dense:** external-tool re-save, in-game import, world placement, ticking/reload, or world-to-schematic recovery. Own writer/reader round trips prove internal recovery only. Concrete in-game placement-to-re-export also remains unverified.
+**Not verified or guaranteed for dense or packed:** external-tool re-save, in-game import, world placement, ticking/reload, or world-to-schematic recovery. Packed is designed to load in Litematica, but no Litematica load has been exercised. Own writer/reader round trips prove internal recovery only. Concrete in-game placement-to-re-export also remains unverified.
 
 ## Changes
 
@@ -145,6 +161,7 @@ Historical **concrete-only** external verification (not rerun for this expansion
 - Added dense version 4 streaming multipart output and automatic whole-file recovery, preserving per-volume safety limits and versions 1–3 decoding. Large dense inputs no longer fail solely at the single-volume 32 MiB payload ceiling.
 - Raised the `--max-height` default from 64 to **384** blocks (the full modern world height) and made `--max-height 0` remove the cap for taller, cube-like layouts. Balanced layouts whose cube product would exceed the resource limit now fall back to the minimum-spread rectangle inside the limit instead of failing, and uncapped concrete heights stay within signed-short storage.
 - Added concrete version 5 streaming multipart for both `.litematic` and `.schematic`, automatic overflow dispatch, shared bounded streaming recovery, and `--part-size-mib` with header/manifest-aware capacity capping. Preserved concrete version 1 and dense versions 2–4 decoding without raising per-volume limits.
+- Added packed version 6, now the `.litematic` default. Each part is compressed with zstd (one frame) and stored in a fixed 1,024-state full-cube palette at 10 bits per position. Parts are processed concurrently via `encode --workers` and `decode --workers`. Part size defaults to 64 MiB (1–79). Each part carries per-part CRC-32/SHA-256, a group identifier, and an aggregate digest, and is recovered through a destination-directory temporary file. Dense now requires explicit `--encoding dense`. Concrete versions 1/5 and dense versions 2–4 still decode unchanged.
 
 ## License
 

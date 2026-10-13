@@ -171,6 +171,9 @@ func Decode(ctx context.Context, v volume.Volume, workers int) (File, error) {
 	if err := ctx.Err(); err != nil {
 		return File{}, fmt.Errorf("decode: %w", err)
 	}
+	if v.Packed != nil {
+		return File{}, fmt.Errorf("packed version 6 structures decode through DecodePacked")
+	}
 	if v.Blocks != nil {
 		return decodeDense(ctx, v, workers)
 	}

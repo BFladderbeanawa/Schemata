@@ -19,6 +19,13 @@ public class Probe {
         Method definition = Class.forName("cpn").getMethod("l");
         Method possibleStates = Class.forName("dcc").getMethod("a");
         Method values = Class.forName("dcd").getMethod("C");
+        // BlockStateBase.isSolidRender(EmptyBlockGetter.INSTANCE, BlockPos.ZERO) and hasBlockEntity.
+        Class<?> stateBase = Class.forName("dca$a");
+        Method solidRender = stateBase.getMethod("i", Class.forName("cls"), Class.forName("gu"));
+        Method hasBlockEntity = stateBase.getMethod("t");
+        Object emptyGetter = Class.forName("cmb").getField("a").get(null);
+        Object origin = Class.forName("gu").getField("b").get(null);
+        List<String> solid = new ArrayList<>();
         Method propertyName = Class.forName("dde").getMethod("f");
         Method propertyValue = Class.forName("dde").getMethod("a", Comparable.class);
         List<String> states = new ArrayList<>();
@@ -31,11 +38,18 @@ public class Probe {
                         + propertyValue.invoke(entry.getKey(), entry.getValue()));
                 }
                 Collections.sort(properties);
-                states.add(name + "[" + String.join(",", properties) + "]");
+                String line = name + "[" + String.join(",", properties) + "]";
+                states.add(line);
+                if ((boolean) solidRender.invoke(state, emptyGetter, origin)
+                    && !(boolean) hasBlockEntity.invoke(state)) {
+                    solid.add(line);
+                }
             }
         }
         Collections.sort(states);
         Files.write(Path.of(args[0]), states, StandardCharsets.UTF_8);
+        Collections.sort(solid);
+        Files.write(Path.of(args[2]), solid, StandardCharsets.UTF_8);
         Object patterns = Class.forName("jb").getField("al").get(null);
         Method hash = Class.forName("cze").getMethod("a");
         Method byHash = Class.forName("cze").getMethod("a", String.class);

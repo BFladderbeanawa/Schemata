@@ -23,13 +23,23 @@ type Layer struct {
 // Volume owns blocks in native x-fastest, then z, then y order.
 // Colors 0–15 are concrete nibbles. Non-nil Blocks selects dense storage;
 // its values index Palette, and Banners is keyed by native block index.
+// Non-nil Packed selects packed storage: the Litematica LongArray bytes as
+// serialized (big-endian 64-bit words), 10 bits per position, least-significant
+// bits first, whose values are packed palette symbols.
 type Volume struct {
 	X, Y, Z int
 	Colors  []byte
 	Palette []State
 	Blocks  []uint32
 	Banners map[int][]Layer
+	Packed  []byte
 }
+
+// PackedBits is the packed symbol width; PackedBytes is its LongArray size.
+const PackedBits = 10
+
+// PackedBytes returns the LongArray byte length for n packed positions.
+func PackedBytes(n int) int { return (n*PackedBits + 63) / 64 * 8 }
 
 // Count validates dimensions before multiplication or allocation.
 func Count(x, y, z int) (int, error) {
@@ -59,6 +69,9 @@ func CountDense(x, y, z int) (int, error) {
 
 // Validate rejects incomplete selections and invalid storage references.
 func (v Volume) Validate() error {
+	if v.Packed != nil {
+		return v.validatePacked()
+	}
 	if v.Blocks != nil {
 		return v.validateDense()
 	}
@@ -101,6 +114,31 @@ func (v Volume) validateDense() error {
 	for i, layers := range v.Banners {
 		if i < 0 || i >= n || len(layers) > 6 {
 			return fmt.Errorf("invalid banner index or layer count at block %d", i)
+		}
+	}
+	return nil
+}
+
+// validatePacked also requires the final word's unused high bits to be zero.
+func (v Volume) validatePacked() error {
+	n, err := CountDense(v.X, v.Y, v.Z)
+	if err != nil {
+		return err
+	}
+	if len(v.Colors) != 0 || v.Blocks != nil || len(v.Palette) != 0 || len(v.Banners) != 0 {
+		return fmt.Errorf("packed storage cannot be mixed with other storage")
+	}
+	if len(v.Packed) != PackedBytes(n) {
+		return fmt.Errorf("packed LongArray length does not match volume")
+	}
+	if used := n * PackedBits % 64; used != 0 {
+		last := v.Packed[len(v.Packed)-8:]
+		word := uint64(0)
+		for _, b := range last {
+			word = word<<8 | uint64(b)
+		}
+		if word>>used != 0 {
+			return fmt.Errorf("nonzero unused bits in final packed word")
 		}
 	}
 	return nil

@@ -66,14 +66,16 @@ func Write(w io.Writer, ext string, v volume.Volume) error {
 	if err := v.Validate(); err != nil {
 		return err
 	}
-	if v.Blocks != nil && ext != ".litematic" {
-		return fmt.Errorf("dense encoding requires .litematic output")
+	if (v.Blocks != nil || v.Packed != nil) && ext != ".litematic" {
+		return fmt.Errorf("dense and packed encodings require .litematic output")
 	}
 	var name string
 	var root tag
 	if ext == ".schematic" {
 		name = "Schematic"
 		root, err = legacyRoot(v)
+	} else if v.Packed != nil {
+		root = packedLitematicRoot(v)
 	} else if v.Blocks != nil {
 		root, err = denseLitematicRoot(v)
 	} else {
@@ -198,11 +200,18 @@ func readLitematic(root tag) (volume.Volume, error) {
 	if len(states.raw) != words*8 {
 		return volume.Volume{}, fmt.Errorf("invalid packed block state length")
 	}
-	// Identification uses actual concrete names, never palette indices. Dense
+	// Identification uses actual state names, never palette indices. Dense
 	// versions use native traversal; versions 1/5 keep the historical unit path.
-	if !unitConcreteBootstrap(palette.list, states.raw, size, width) &&
-		nativeDenseBootstrap(palette.list, states.raw, n, width) {
+	// Packed is tried last: concrete/dense identifiers need yellow concrete,
+	// which is outside the packed palette.
+	unit := unitConcreteBootstrap(palette.list, states.raw, size, width)
+	if !unit && nativeDenseBootstrap(palette.list, states.raw, n, width) {
 		return readDenseLitematic(region, size, palette.list, states.raw)
+	}
+	if !unit {
+		if mapping, valid := packedMapping(palette.list); packedBootstrap(mapping, states.raw, n, width) {
+			return readPackedLitematic(region, size, palette.list, states.raw, mapping, valid)
+		}
 	}
 	if _, err := volume.Count(size[0], size[1], size[2]); err != nil {
 		return volume.Volume{}, err

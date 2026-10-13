@@ -25,8 +25,7 @@ func TestDenseCLIBannerOptIn(t *testing.T) {
 		flags   []string
 		banners bool
 	}{
-		{name: "default"},
-		{name: "explicit dense", flags: []string{"--encoding", "dense"}},
+		{name: "explicit dense"},
 		{name: "disabled", flags: []string{"--banners=false"}},
 		{name: "enabled", flags: []string{"--banners"}, banners: true},
 	} {
@@ -38,7 +37,7 @@ func TestDenseCLIBannerOptIn(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := filepath.Join(dir, "data.litematic")
-			args := append([]string{"encode"}, tc.flags...)
+			args := append([]string{"encode", "--encoding", "dense"}, tc.flags...)
 			execute(t, append(args, input, path), 0)
 			v, err := readStructure(path, ".litematic")
 			if err != nil {

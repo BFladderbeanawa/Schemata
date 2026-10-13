@@ -21,6 +21,8 @@ MAPPINGS_SHA1 = "0b4dba049482496c507b2387a73a913230ebbd76"
 SCHEMA_SHA256 = "f7b3dbb683023fff9acb7672aa5efa35f9c1cd6e4a03a2b91e21b095eb3477a0"
 PATTERNS_SHA256 = "63b225bdbb97603bbc93cd351afe82618915370724e69a47fbffe5523d32258a"
 STATES_SHA256 = "caa0de3f16bab78ef7df9f6e4350bc2df3e17f314e7f4af20f0434506c84bdcc"
+SOLID_SHA256 = "396b090e55ea4e9f93d9ef7a0ee1e0002e19746449542729ed48b40f4c40c516"
+PACKED_SHA256 = "906c19a2ae7b3aab3680d8d556e1c763227262ab151080cbd4a45708ec45ec82"
 
 
 def require(condition, message):
@@ -73,7 +75,7 @@ def main():
     classpath = os.pathsep.join([str(inner)] + sorted(str(p) for p in (work / "libraries").rglob("*.jar")))
     subprocess.run([
         java, "-cp", classpath, str(source / "Probe.java"),
-        str(work / "states-live.txt"), str(work / "patterns-live.txt"),
+        str(work / "states-live.txt"), str(work / "patterns-live.txt"), str(work / "solid-live.txt"),
     ], cwd=work, check=True)
     live_states = (work / "states-live.txt").read_text(encoding="utf-8").splitlines()
     live_patterns = (work / "patterns-live.txt").read_text(encoding="utf-8").splitlines()
@@ -109,6 +111,23 @@ def main():
     for filename, lines, expected in [
         ("blocks.tsv", schemas, SCHEMA_SHA256),
         ("patterns.tsv", live_patterns, PATTERNS_SHA256),
+    ]:
+        data = ("\n".join(lines) + "\n").encode()
+        require(hashlib.sha256(data).hexdigest() == expected, filename + " fingerprint changed")
+        (output / filename).write_bytes(data)
+        print(filename, "SHA-256", expected)
+    # Packed version 6: isSolidRender(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)
+    # and no block entity, then the first 1,024 in canonical catalog order.
+    solid = (work / "solid-live.txt").read_text(encoding="utf-8").splitlines()
+    solid_set = set(solid)
+    require(len(solid) == len(solid_set) == 1989, "solid-render state count changed")
+    require(len({line.split("[")[0] for line in solid}) == 382, "solid-render block count changed")
+    selected = [state for state in canonical_states if state in solid_set]
+    require(len(selected) == 1989, "solid-render states missing from catalog")
+    packed = selected[:1024]
+    for filename, lines, expected in [
+        ("solid.tsv", sorted(solid), SOLID_SHA256),
+        ("packed.tsv", packed, PACKED_SHA256),
     ]:
         data = ("\n".join(lines) + "\n").encode()
         require(hashlib.sha256(data).hexdigest() == expected, filename + " fingerprint changed")

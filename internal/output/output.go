@@ -89,3 +89,41 @@ func Create(dir, name string, write func(io.Writer) error) (path string, err err
 		return filepath.Join(dir, candidate), nil
 	}
 }
+
+// Publish gives the completed file source a collision-free name in dir
+// without overwriting. It hard-links, which fails atomically on an existing
+// name, and falls back to an exclusive copy where links are unsupported.
+// The caller still owns and removes source.
+func Publish(dir, name, source string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for suffix := 0; ; suffix++ {
+		candidate := name
+		if suffix > 0 {
+			candidate = stem + " (" + strconv.Itoa(suffix) + ")" + ext
+		}
+		if err := ValidateName(candidate); err != nil {
+			return "", err
+		}
+		target := filepath.Join(dir, candidate)
+		linkErr := os.Link(source, target)
+		if linkErr == nil {
+			return target, nil
+		}
+		if errors.Is(linkErr, os.ErrExist) {
+			continue
+		}
+		return Create(dir, candidate, func(w io.Writer) (err error) {
+			f, err := os.Open(source)
+			if err != nil {
+				return err
+			}
+			defer func() { err = errors.Join(err, f.Close()) }()
+			_, err = io.Copy(w, f)
+			return err
+		})
+	}
+}

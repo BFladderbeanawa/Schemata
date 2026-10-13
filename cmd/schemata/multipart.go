@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bfladderbeanawa/schemata/internal/codec"
@@ -228,35 +229,23 @@ func decodeParts(
 	if !info.IsDir() {
 		directory = filepath.Dir(input)
 	}
-	dir, err := os.Open(directory)
+	paths, err := listParts(directory, ".litematic", ".schematic")
 	if err != nil {
 		return "", err
 	}
-	defer func() { err = errors.Join(err, dir.Close()) }()
-	paths := make([]string, 0)
-	for {
-		entries, readErr := dir.ReadDir(128)
-		for _, entry := range entries {
-			ext := strings.ToLower(filepath.Ext(entry.Name()))
-			if ext == ".litematic" || ext == ".schematic" {
-				if !entry.Type().IsRegular() {
-					return "", errors.New("multipart entries must be regular files")
-				}
-				paths = append(paths, filepath.Join(directory, entry.Name()))
-				if len(paths) > maxParts {
-					return "", errors.New("multipart directory exceeds 4096 parts")
-				}
+	// Packed sets are identified by their in-structure stream, not names.
+	for _, p := range paths {
+		if strings.ToLower(filepath.Ext(p)) != ".litematic" {
+			continue
+		}
+		if v, readErr := readStructure(p, ".litematic"); readErr == nil && v.Packed != nil {
+			packedPaths, err := listParts(directory, ".litematic")
+			if err != nil {
+				return "", err
 			}
+			return decodePacked(ctx, packedPaths, destination, replacement, workers)
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
-	}
-	if len(paths) == 0 {
-		return "", errors.New("multipart directory contains no supported schematic parts")
+		break
 	}
 	temp, err := os.CreateTemp("", "schemata-recovery-*")
 	if err != nil {
@@ -344,4 +333,39 @@ func decodeParts(
 		_, err := copyContext(ctx, w, temp)
 		return err
 	})
+}
+
+// listParts enumerates at most maxParts regular files with the given
+// lowercase extensions; names and listing order never identify parts.
+func listParts(directory string, exts ...string) (paths []string, err error) {
+	dir, err := os.Open(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, dir.Close()) }()
+	for {
+		entries, readErr := dir.ReadDir(128)
+		for _, entry := range entries {
+			if !slices.Contains(exts, strings.ToLower(filepath.Ext(entry.Name()))) {
+				continue
+			}
+			if !entry.Type().IsRegular() {
+				return nil, errors.New("multipart entries must be regular files")
+			}
+			paths = append(paths, filepath.Join(directory, entry.Name()))
+			if len(paths) > maxParts {
+				return nil, errors.New("multipart directory exceeds 4096 parts")
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("multipart directory contains no supported schematic parts")
+	}
+	return paths, nil
 }
